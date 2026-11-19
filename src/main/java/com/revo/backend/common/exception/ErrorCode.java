@@ -5,6 +5,16 @@ import org.springframework.http.HttpStatus;
 
 public enum ErrorCode {
 
+    CONTACT_ALREADY_USED(
+            HttpStatus.CONFLICT,
+            "Email hoặc số điện thoại đã được sử dụng."
+    ),
+
+    OTP_DELIVERY_UNAVAILABLE(
+            HttpStatus.SERVICE_UNAVAILABLE,
+            "Chưa thể gửi mã xác minh. Vui lòng thử lại."
+    ),
+
     UNAUTHORIZED(
             HttpStatus.UNAUTHORIZED,
             "Bạn cần đăng nhập để thực hiện thao tác này."
