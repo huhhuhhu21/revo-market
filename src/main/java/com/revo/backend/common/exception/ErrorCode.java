@@ -5,6 +5,16 @@ import org.springframework.http.HttpStatus;
 
 public enum ErrorCode {
 
+    UNAUTHORIZED(
+            HttpStatus.UNAUTHORIZED,
+            "Bạn cần đăng nhập để thực hiện thao tác này."
+    ),
+
+    FORBIDDEN(
+            HttpStatus.FORBIDDEN,
+            "Bạn không có quyền thực hiện thao tác này."
+    ),
+
     VALIDATION_ERROR(
             HttpStatus.BAD_REQUEST,
             "Dữ liệu không hợp lệ."
@@ -35,4 +45,6 @@ public enum ErrorCode {
     public String getDefaultMessage() {
         return defaultMessage;
     }
+
+
 }
