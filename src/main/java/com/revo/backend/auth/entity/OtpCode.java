@@ -28,6 +28,12 @@ public class OtpCode {
     @Column(name = "expires_at", nullable = false)
     private LocalDateTime expiresAt;
 
+    @Column(name = "failed_attempts", nullable = false)
+    private int failedAttempts = 0;
+
+    @Column(name = "consumed_at")
+    private LocalDateTime consumedAt;
+
     protected OtpCode() {
     }
 
@@ -42,4 +48,36 @@ public class OtpCode {
         this.codeHash = codeHash;
         this.expiresAt = expiresAt;
     }
+
+    public String getTargetOtp() {
+        return targetOtp;
+    }
+
+    public String getCodeHash() {
+        return codeHash;
+    }
+
+    public LocalDateTime getExpiresAt() {
+        return expiresAt;
+    }
+
+    public LocalDateTime getConsumedAt() {
+        return consumedAt;
+    }
+
+    public int getFailedAttempts() {
+        return failedAttempts;
+    }
+
+    public void incrementFailedAttempts() {
+        if (failedAttempts < 5) {
+            failedAttempts++;
+        }
+    }
+
+    public void markConsumed(LocalDateTime time) {
+        this.consumedAt = time;
+    }
+
+
 }

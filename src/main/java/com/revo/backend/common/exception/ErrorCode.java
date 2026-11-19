@@ -5,6 +5,31 @@ import org.springframework.http.HttpStatus;
 
 public enum ErrorCode {
 
+    OTP_INVALID(
+            HttpStatus.UNPROCESSABLE_CONTENT,
+            "Mã xác minh không hợp lệ."
+    ),
+
+    OTP_EXPIRED(
+            HttpStatus.UNPROCESSABLE_CONTENT,
+            "Mã xác minh đã hết hạn."
+    ),
+
+    OTP_ALREADY_USED(
+            HttpStatus.UNPROCESSABLE_CONTENT,
+            "Mã xác minh đã được sử dụng."
+    ),
+
+    OTP_ATTEMPTS_EXCEEDED(
+            HttpStatus.TOO_MANY_REQUESTS,
+            "Bạn đã nhập sai mã xác minh quá số lần cho phép."
+    ),
+
+    ACCOUNT_ALREADY_VERIFIED(
+            HttpStatus.CONFLICT,
+            "Tài khoản đã được xác minh."
+    ),
+
     CONTACT_ALREADY_USED(
             HttpStatus.CONFLICT,
             "Email hoặc số điện thoại đã được sử dụng."

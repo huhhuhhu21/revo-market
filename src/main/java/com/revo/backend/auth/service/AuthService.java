@@ -21,6 +21,12 @@ import java.time.ZoneOffset;
 import java.util.Locale;
 import java.util.regex.Pattern;
 
+import com.revo.backend.auth.dto.VerifyRegistrationRequest;
+import com.revo.backend.auth.dto.VerifyRegistrationResponse;
+
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
+
 @Service
 public class AuthService {
 
@@ -148,4 +154,97 @@ public class AuthService {
                 )
         );
     }
+
+
+    @Transactional(noRollbackFor = OtpAttemptException.class)
+    public VerifyRegistrationResponse verifyRegistration(
+            VerifyRegistrationRequest request
+    ) {
+        User user = userRepository
+                .findByIdForUpdate(request.userId())
+                .orElseThrow(() ->
+                        new BusinessException(ErrorCode.OTP_INVALID)
+                );
+
+        if (user.getStatus() != User.Status.PENDING_VERIFICATION) {
+            throw new BusinessException(
+                    ErrorCode.ACCOUNT_ALREADY_VERIFIED
+            );
+        }
+
+        OtpCode otpCode = otpCodeRepository
+                .findFirstByUser_IdAndPurposeOrderByIdDesc(
+                        user.getId(),
+                        "REGISTER"
+                )
+                .orElseThrow(() ->
+                        new BusinessException(ErrorCode.OTP_INVALID)
+                );
+
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+
+        if (otpCode.getConsumedAt() != null) {
+            throw new BusinessException(
+                    ErrorCode.OTP_ALREADY_USED
+            );
+        }
+
+        if (!now.isBefore(otpCode.getExpiresAt())) {
+            throw new BusinessException(
+                    ErrorCode.OTP_EXPIRED
+            );
+        }
+
+        if (otpCode.getFailedAttempts() >= 5) {
+            throw new BusinessException(
+                    ErrorCode.OTP_ATTEMPTS_EXCEEDED
+            );
+        }
+
+        String target = otpCode.getTargetOtp();
+
+        boolean isEmail = target.equals(user.getEmail());
+        boolean isPhone = target.equals(user.getPhone());
+
+        if (!isEmail && !isPhone) {
+            throw new BusinessException(
+                    ErrorCode.OTP_INVALID
+            );
+        }
+
+        if (!passwordEncoder.matches(
+                request.otp(),
+                otpCode.getCodeHash()
+        )) {
+            otpCode.incrementFailedAttempts();
+
+            ErrorCode errorCode =
+                    otpCode.getFailedAttempts() >= 5
+                            ? ErrorCode.OTP_ATTEMPTS_EXCEEDED
+                            : ErrorCode.OTP_INVALID;
+
+            throw new OtpAttemptException(errorCode);
+        }
+
+        otpCode.markConsumed(now);
+
+        if (isEmail) {
+            user.activateWithEmail();
+        } else {
+            user.activateWithPhone();
+        }
+
+        return new VerifyRegistrationResponse(
+                true,
+                user.getStatus().name()
+        );
+    }
+    private static final class OtpAttemptException
+            extends BusinessException {
+
+        private OtpAttemptException(ErrorCode errorCode) {
+            super(errorCode);
+        }
+    }
+
 }

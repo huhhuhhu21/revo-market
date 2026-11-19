@@ -67,4 +67,22 @@ public class User {
     public Status getStatus() {
         return status;
     }
+
+    public String getEmail() {
+        return email;
+    }
+
+    public String getPhone() {
+        return phone;
+    }
+
+    public void activateWithEmail() {
+        this.emailVerified = true;
+        this.status = Status.ACTIVE;
+    }
+
+    public void activateWithPhone() {
+        this.phoneVerified = true;
+        this.status = Status.ACTIVE;
+    }
 }
