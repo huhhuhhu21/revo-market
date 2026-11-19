@@ -20,6 +20,26 @@ public enum ErrorCode {
             "Đăng nhập tạm thời bị khóa. Vui lòng thử lại sau."
     ),
 
+    REFRESH_TOKEN_INVALID(
+            HttpStatus.UNAUTHORIZED,
+            "Refresh Token không hợp lệ."
+    ),
+
+    REFRESH_TOKEN_EXPIRED(
+            HttpStatus.UNAUTHORIZED,
+            "Refresh Token đã hết hạn."
+    ),
+
+    SESSION_REVOKED(
+            HttpStatus.UNAUTHORIZED,
+            "Phiên đăng nhập đã bị thu hồi."
+    ),
+
+    REFRESH_TOKEN_ALREADY_ROTATED(
+            HttpStatus.CONFLICT,
+            "Refresh Token đã được thay thế bởi yêu cầu khác."
+    ),
+
     OTP_INVALID(
             HttpStatus.UNPROCESSABLE_CONTENT,
             "Mã xác minh không hợp lệ."

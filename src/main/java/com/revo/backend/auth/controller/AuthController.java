@@ -48,4 +48,11 @@ public class AuthController {
     ) {
         return authService.login(request);
     }
+
+    @PostMapping("/refresh")
+    public AuthSessionResponse refresh(
+            @Valid @RequestBody RefreshTokenRequest request
+    ) {
+        return authService.refresh(request);
+    }
 }

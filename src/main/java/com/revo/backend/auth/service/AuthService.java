@@ -1,10 +1,11 @@
 package com.revo.backend.auth.service;
 
-import com.revo.backend.auth.dto.RegisterRequest;
-import com.revo.backend.auth.dto.RegisterResponse;
+import com.revo.backend.auth.dto.*;
 import com.revo.backend.auth.entity.OtpCode;
+import com.revo.backend.auth.entity.RefreshToken;
 import com.revo.backend.auth.entity.User;
 import com.revo.backend.auth.repository.OtpCodeRepository;
+import com.revo.backend.auth.repository.RefreshTokenRepository;
 import com.revo.backend.auth.repository.UserRepository;
 import com.revo.backend.common.exception.BusinessException;
 import com.revo.backend.common.exception.ErrorCode;
@@ -20,21 +21,12 @@ import java.time.*;
 import java.util.Locale;
 import java.util.regex.Pattern;
 
-import com.revo.backend.auth.dto.VerifyRegistrationRequest;
-import com.revo.backend.auth.dto.VerifyRegistrationResponse;
-
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
-
-import com.revo.backend.auth.dto.ResendRegistrationRequest;
-import com.revo.backend.auth.dto.ResendRegistrationResponse;
 
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.Locale;
-
-import com.revo.backend.auth.dto.LoginRequest;
-import com.revo.backend.auth.dto.AuthSessionResponse;
 
 import java.util.Locale;
 
@@ -64,12 +56,15 @@ public class AuthService {
         }
     }
 
+    private final RefreshTokenRepository refreshTokenRepository;
+
     public AuthService(
             UserRepository userRepository,
             OtpCodeRepository otpCodeRepository,
             PasswordEncoder passwordEncoder,
             EmailOtpSender emailOtpSender,
-            TokenService tokenService
+            TokenService tokenService,
+            RefreshTokenRepository refreshTokenRepository
     ) {
         this.userRepository = userRepository;
         this.otpCodeRepository = otpCodeRepository;
@@ -80,6 +75,7 @@ public class AuthService {
         this.dummyPasswordHash = passwordEncoder.encode(
                 "dummy-password-for-missing-user"
         );
+        this.refreshTokenRepository = refreshTokenRepository;
     }
 
     @Transactional
@@ -445,7 +441,62 @@ public class AuthService {
     }
 
 
+    @Transactional
+    public AuthSessionResponse refresh(RefreshTokenRequest request) {
 
+        // 1. Hash token nhận từ client.
+        String tokenHash = tokenService.hashRefreshToken(
+                request.refreshToken()
+        );
 
+        // 2. Tìm ID phiên dựa trên hash hiện tại.
+        Long sessionId = refreshTokenRepository
+                .findIdByTokenHash(tokenHash)
+                .orElseThrow(() -> new BusinessException(
+                        ErrorCode.REFRESH_TOKEN_INVALID
+                ));
+
+        // 3. Khóa phiên và đọc lại trạng thái mới nhất.
+        RefreshToken session = refreshTokenRepository
+                .findByIdForUpdate(sessionId)
+                .orElseThrow(() -> new BusinessException(
+                        ErrorCode.REFRESH_TOKEN_INVALID
+                ));
+
+        // 4. Kiểm tra phiên đã bị thu hồi.
+        if (session.getRevokedAt() != null) {
+            throw new BusinessException(
+                    ErrorCode.SESSION_REVOKED
+            );
+        }
+
+        // 5. Kiểm tra thời hạn refresh token.
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+
+        if (!session.getExpiresAt().isAfter(now)) {
+            throw new BusinessException(
+                    ErrorCode.REFRESH_TOKEN_EXPIRED
+            );
+        }
+
+        // 6. Tài khoản chưa xác minh không được refresh.
+        User user = session.getUser();
+
+        if (user.getStatus() == User.Status.PENDING_VERIFICATION) {
+            throw new BusinessException(
+                    ErrorCode.REFRESH_TOKEN_INVALID
+            );
+        }
+
+        // 7. Kiểm tra lại hash sau khi lấy khóa.
+        if (!session.getTokenHash().equals(tokenHash)) {
+            throw new BusinessException(
+                    ErrorCode.REFRESH_TOKEN_ALREADY_ROTATED
+            );
+        }
+
+        // 8. Xoay vòng token trên cùng phiên.
+        return tokenService.rotateSession(session);
+    }
 
 }

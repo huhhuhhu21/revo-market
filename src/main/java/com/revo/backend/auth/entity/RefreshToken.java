@@ -53,4 +53,16 @@ public class RefreshToken {
     public LocalDateTime getRevokedAt() {
         return revokedAt;
     }
+
+    public String getTokenHash() {
+        return tokenHash;
+    }
+
+    public void rotate(
+            String newTokenHash,
+            LocalDateTime newExpiresAt
+    ) {
+        this.tokenHash = newTokenHash;
+        this.expiresAt = newExpiresAt;
+    }
 }
