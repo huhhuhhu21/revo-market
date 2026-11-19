@@ -1,16 +1,13 @@
 package com.revo.backend.auth.controller;
 
 
-import com.revo.backend.auth.dto.RegisterRequest;
-import com.revo.backend.auth.dto.RegisterResponse;
+import com.revo.backend.auth.dto.*;
 
 import com.revo.backend.auth.service.AuthService;
 import jakarta.validation.Valid;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
-import com.revo.backend.auth.dto.VerifyRegistrationRequest;
-import com.revo.backend.auth.dto.VerifyRegistrationResponse;
 
 @RestController
 @RequestMapping("/api/v1/auth")
@@ -35,5 +32,20 @@ public class AuthController {
             @Valid @RequestBody VerifyRegistrationRequest request
     ) {
         return authService.verifyRegistration(request);
+    }
+
+    @PostMapping("/register/resend")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    public ResendRegistrationResponse resendRegistration(
+            @Valid @RequestBody ResendRegistrationRequest request
+    ) {
+        return authService.resendRegistration(request);
+    }
+
+    @PostMapping("/login")
+    public AuthSessionResponse login(
+            @Valid @RequestBody LoginRequest request
+    ) {
+        return authService.login(request);
     }
 }

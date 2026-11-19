@@ -5,6 +5,21 @@ import org.springframework.http.HttpStatus;
 
 public enum ErrorCode {
 
+    INVALID_CREDENTIALS(
+            HttpStatus.UNAUTHORIZED,
+            "Thông tin đăng nhập không chính xác."
+    ),
+
+    ACCOUNT_NOT_VERIFIED(
+            HttpStatus.FORBIDDEN,
+            "Tài khoản chưa được xác minh."
+    ),
+
+    LOGIN_TEMPORARILY_LOCKED(
+            HttpStatus.TOO_MANY_REQUESTS,
+            "Đăng nhập tạm thời bị khóa. Vui lòng thử lại sau."
+    ),
+
     OTP_INVALID(
             HttpStatus.UNPROCESSABLE_CONTENT,
             "Mã xác minh không hợp lệ."
@@ -28,6 +43,16 @@ public enum ErrorCode {
     ACCOUNT_ALREADY_VERIFIED(
             HttpStatus.CONFLICT,
             "Tài khoản đã được xác minh."
+    ),
+
+    OTP_RESEND_TOO_SOON(
+            HttpStatus.TOO_MANY_REQUESTS,
+            "Vui lòng đợi ít nhất 60 giây trước khi gửi lại OTP."
+    ),
+
+    ACCOUNT_NOT_FOUND(
+            HttpStatus.NOT_FOUND,
+            "Không tìm thấy tài khoản."
     ),
 
     CONTACT_ALREADY_USED(
@@ -64,6 +89,8 @@ public enum ErrorCode {
             HttpStatus.CONFLICT,
             "Danh mục đã ngừng sử dụng."
     );
+
+
 
     private final HttpStatus httpStatus;
     private final String defaultMessage;

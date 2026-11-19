@@ -14,6 +14,7 @@ import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import com.revo.backend.auth.security.JwtSessionAuthenticationConverter;
 
 @Configuration
 @EnableWebSecurity
@@ -27,7 +28,8 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain securityFilterChain(
             HttpSecurity http,
-            RestSecurityErrorHandler securityErrorHandler
+            RestSecurityErrorHandler securityErrorHandler,
+            JwtSessionAuthenticationConverter jwtConverter
     ) throws Exception {
 
         return http
@@ -45,6 +47,13 @@ public class SecurityConfig {
                 .exceptionHandling(exception -> exception
                         .authenticationEntryPoint(securityErrorHandler)
                         .accessDeniedHandler(securityErrorHandler)
+                )
+
+                .oauth2ResourceServer(oauth -> oauth
+                        .jwt(jwt -> jwt
+                                .jwtAuthenticationConverter(jwtConverter)
+                        )
+                        .authenticationEntryPoint(securityErrorHandler)
                 )
 
                 .authorizeHttpRequests(auth -> auth
@@ -74,6 +83,9 @@ public class SecurityConfig {
                                 "/swagger-ui/**",
                                 "/v3/api-docs/**"
                         ).permitAll()
+
+                        .requestMatchers("/api/v1/admin/**")
+                        .hasRole("ADMIN")
 
                         .anyRequest().authenticated()
                 )

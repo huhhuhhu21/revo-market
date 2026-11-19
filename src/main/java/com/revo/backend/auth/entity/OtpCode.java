@@ -34,6 +34,19 @@ public class OtpCode {
     @Column(name = "consumed_at")
     private LocalDateTime consumedAt;
 
+    @Column(
+            name = "last_sent_at",
+            nullable = false,
+            insertable = false,
+            updatable = false
+    )
+
+    private LocalDateTime lastSentAt;
+
+    public LocalDateTime getLastSentAt() {
+        return lastSentAt;
+    }
+
     protected OtpCode() {
     }
 
