@@ -248,7 +248,13 @@ public enum ErrorCode {
     CONTACT_PHONE_REQUIRED(
             HttpStatus.FORBIDDEN,
             "Cần có số điện thoại liên hệ để giao dịch."
+    ),
+
+    INVALID_STATUS_FILTER(
+            HttpStatus.BAD_REQUEST,
+            "Trạng thái lọc không hợp lệ."
     );
+
 
 
     private final HttpStatus httpStatus;

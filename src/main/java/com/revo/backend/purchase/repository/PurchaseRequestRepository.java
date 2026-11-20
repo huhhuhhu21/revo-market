@@ -14,6 +14,7 @@ import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 
 import java.util.List;
+
 public interface PurchaseRequestRepository
         extends JpaRepository<PurchaseRequest, Long>,
         JpaSpecificationExecutor<PurchaseRequest> {

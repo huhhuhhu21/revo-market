@@ -10,7 +10,7 @@ import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.*;
 
 import java.net.URI;
-
+import com.revo.backend.purchase.dto.SentPurchaseRequestPage;
 @RestController
 @RequestMapping("/api/v1/purchase-requests")
 public class PurchaseRequestController {
@@ -31,5 +31,22 @@ public class PurchaseRequestController {
         return ResponseEntity
                 .created(URI.create("/api/v1/purchase-requests/" + result.id()))
                 .body(result);
+    }
+
+    @GetMapping("/sent")
+    public SentPurchaseRequestPage getSentRequests(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(defaultValue = "ALL") String status,
+            @AuthenticationPrincipal Jwt jwt
+    ) {
+        Long buyerId = Long.parseLong(jwt.getSubject());
+
+        return service.getSentRequests(
+                buyerId,
+                page,
+                size,
+                status
+        );
     }
 }
