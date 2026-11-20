@@ -499,4 +499,43 @@ public class AuthService {
         return tokenService.rotateSession(session);
     }
 
+
+    @Transactional
+    public void logout(Long userId, Long sessionId) {
+
+        // 1. Tìm và khóa phiên cần đăng xuất.
+        RefreshToken session = refreshTokenRepository
+                .findByIdForUpdate(sessionId)
+                .orElseThrow(() -> new BusinessException(
+                        ErrorCode.UNAUTHORIZED
+                ));
+
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+
+        // 2. Kiểm tra phiên thuộc đúng người dùng.
+        if (!session.getUser().getId().equals(userId)) {
+            throw new BusinessException(
+                    ErrorCode.UNAUTHORIZED
+            );
+        }
+
+        // 3. Không cho đăng xuất phiên đã thu hồi.
+        if (session.getRevokedAt() != null) {
+            throw new BusinessException(
+                    ErrorCode.UNAUTHORIZED
+            );
+        }
+
+        // 4. Không chấp nhận phiên hết hạn.
+        if (!session.getExpiresAt().isAfter(now)) {
+            throw new BusinessException(
+                    ErrorCode.UNAUTHORIZED
+            );
+        }
+
+        // 5. Đánh dấu thu hồi phiên.
+        session.revoke(now);
+    }
+
+
 }

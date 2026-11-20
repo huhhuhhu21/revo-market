@@ -1,6 +1,7 @@
 
-package com.revo.backend.category;
+package com.revo.backend.category.entity;
 
+import com.revo.backend.category.CategoryStatus;
 import jakarta.persistence.*;
 import java.time.LocalDateTime;
 

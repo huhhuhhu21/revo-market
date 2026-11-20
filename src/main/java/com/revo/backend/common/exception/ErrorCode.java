@@ -5,6 +5,8 @@ import org.springframework.http.HttpStatus;
 
 public enum ErrorCode {
 
+
+
     INVALID_CREDENTIALS(
             HttpStatus.UNAUTHORIZED,
             "Thông tin đăng nhập không chính xác."
@@ -105,10 +107,27 @@ public enum ErrorCode {
             "Bài đăng đang có giao dịch chưa hoàn tất."
     ),
 
+
     CATEGORY_INACTIVE(
             HttpStatus.CONFLICT,
             "Danh mục đã ngừng sử dụng."
+    ),
+
+    INVALID_FILTER(
+            HttpStatus.BAD_REQUEST,
+            "Bộ lọc tìm kiếm không hợp lệ."
+    ),
+
+    INVALID_PAGINATION(
+            HttpStatus.BAD_REQUEST,
+            "Tham số phân trang không hợp lệ."
+    ),
+
+    INVALID_PRICE_RANGE(
+            HttpStatus.BAD_REQUEST,
+            "Khoảng giá không hợp lệ."
     );
+
 
 
 

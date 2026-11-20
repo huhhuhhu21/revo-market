@@ -8,6 +8,9 @@ import jakarta.validation.Valid;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.http.HttpStatus;
 
 @RestController
 @RequestMapping("/api/v1/auth")
@@ -55,4 +58,22 @@ public class AuthController {
     ) {
         return authService.refresh(request);
     }
+
+
+    @PostMapping("/logout")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void logout(@AuthenticationPrincipal Jwt jwt) {
+
+        Long userId = Long.parseLong(
+                jwt.getSubject()
+        );
+
+        Long sessionId = Long.parseLong(
+                jwt.getClaimAsString("sid")
+        );
+
+        authService.logout(userId, sessionId);
+    }
+
+
 }

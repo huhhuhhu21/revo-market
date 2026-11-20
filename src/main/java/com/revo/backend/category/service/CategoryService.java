@@ -1,8 +1,10 @@
 
-package com.revo.backend.category;
+package com.revo.backend.category.service;
 
+import com.revo.backend.category.CategoryStatus;
 import com.revo.backend.category.dto.CategoryListResponse;
 
+import com.revo.backend.category.repository.CategoryRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 

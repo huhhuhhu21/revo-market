@@ -1,6 +1,7 @@
 
-package com.revo.backend.category;
+package com.revo.backend.category.controller;
 
+import com.revo.backend.category.service.CategoryService;
 import com.revo.backend.category.dto.CategoryListResponse;
 
 import org.springframework.web.bind.annotation.GetMapping;
