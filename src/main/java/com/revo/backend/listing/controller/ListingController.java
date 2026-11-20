@@ -13,6 +13,7 @@ import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
 import java.net.URI;
 import tools.jackson.databind.JsonNode;
+import org.springframework.http.HttpStatus;
 
 @RestController
 @RequestMapping("/api/v1/listings")
@@ -97,6 +98,20 @@ public class ListingController {
                 sellerId,
                 listingId,
                 request
+        );
+    }
+
+    @DeleteMapping("/{listingId}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void delete(
+            @PathVariable String listingId,
+            @AuthenticationPrincipal Jwt jwt
+    ) {
+        Long sellerId = Long.parseLong(jwt.getSubject());
+
+        listingService.delete(
+                sellerId,
+                listingId
         );
     }
 }

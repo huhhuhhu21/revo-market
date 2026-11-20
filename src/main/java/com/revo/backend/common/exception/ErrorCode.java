@@ -183,10 +183,6 @@ public enum ErrorCode {
         "Upload token đã hết hạn."
     ),
 
-    CONTACT_PHONE_REQUIRED(
-            HttpStatus.UNPROCESSABLE_CONTENT,
-        "Cần cập nhật số điện thoại liên hệ trước khi đăng bán."
-    ),
 
     NOT_LISTING_OWNER(
             HttpStatus.FORBIDDEN,
@@ -202,6 +198,56 @@ public enum ErrorCode {
     LISTING_NOT_EDITABLE(
             HttpStatus.CONFLICT,
             "Trạng thái bài đăng không cho phép chỉnh sửa."
+    ),
+
+    SOLD_LISTING_IMMUTABLE(
+            HttpStatus.CONFLICT,
+        "Bài đăng đã bán không thể xóa hoặc chỉnh sửa."
+    ),
+    INVALID_AI_INPUT(
+            HttpStatus.BAD_REQUEST,
+            "Dữ liệu yêu cầu gợi ý AI không hợp lệ."
+    ),
+
+    AI_UNAVAILABLE(
+            HttpStatus.SERVICE_UNAVAILABLE,
+            "Dịch vụ AI tạm thời không khả dụng."
+    ),
+
+    AI_TIMEOUT(
+            HttpStatus.GATEWAY_TIMEOUT,
+            "AI phản hồi quá thời gian cho phép."
+    ),
+    // C01 - Gửi yêu cầu mua
+
+    LISTING_NOT_AVAILABLE(
+            HttpStatus.CONFLICT,
+            "Bài đăng hiện không nhận yêu cầu mua."
+    ),
+
+    CANNOT_BUY_OWN_LISTING(
+            HttpStatus.FORBIDDEN,
+            "Bạn không thể mua bài đăng của chính mình."
+    ),
+
+    PURCHASE_REQUEST_ALREADY_PENDING(
+            HttpStatus.CONFLICT,
+            "Bạn đã có yêu cầu mua đang chờ cho bài này."
+    ),
+
+    DELIVERY_ADDRESS_REQUIRED(
+            HttpStatus.UNPROCESSABLE_CONTENT,
+            "Vui lòng bổ sung địa chỉ nhận hàng hợp lệ."
+    ),
+
+    INVALID_DELIVERY_CONTACT(
+            HttpStatus.UNPROCESSABLE_CONTENT,
+            "Số điện thoại người nhận không hợp lệ."
+    ),
+
+    CONTACT_PHONE_REQUIRED(
+            HttpStatus.FORBIDDEN,
+            "Cần có số điện thoại liên hệ để giao dịch."
     );
 
 

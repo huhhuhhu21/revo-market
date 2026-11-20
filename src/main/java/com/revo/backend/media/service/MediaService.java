@@ -6,47 +6,47 @@ import com.revo.backend.common.exception.BusinessException;
 import com.revo.backend.common.exception.ErrorCode;
 import com.revo.backend.media.dto.MediaUploadResponse;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.multipart.MultipartFile;
+
 import software.amazon.awssdk.core.exception.SdkException;
 import software.amazon.awssdk.core.sync.RequestBody;
+import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.CopyObjectRequest;
+import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
+import software.amazon.awssdk.services.s3.model.GetObjectRequest;
+import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
+import software.amazon.awssdk.services.s3.model.HeadObjectResponse;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
+import software.amazon.awssdk.services.s3.model.S3Exception;
+import software.amazon.awssdk.services.s3.presigner.S3Presigner;
+import software.amazon.awssdk.services.s3.presigner.model.GetObjectPresignRequest;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import javax.imageio.ImageIO;
 import javax.imageio.ImageReader;
 import javax.imageio.stream.ImageInputStream;
+import javax.imageio.stream.MemoryCacheImageInputStream;
 
+import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.*;
 import java.security.GeneralSecurityException;
+import java.security.MessageDigest;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.Base64;
 import java.util.Iterator;
-import java.util.Locale;
 import java.util.UUID;
-import software.amazon.awssdk.services.s3.S3Client;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
-
-import software.amazon.awssdk.core.exception.SdkException;
-import software.amazon.awssdk.services.s3.model.*;
-
-import java.security.MessageDigest;
-import software.amazon.awssdk.services.s3.presigner.S3Presigner;
-import software.amazon.awssdk.services.s3.presigner.model.GetObjectPresignRequest;
-
-import java.time.Duration;
 
 
 @Service
@@ -68,6 +68,11 @@ public class MediaService {
     public record ListingTicket(
             String sourceKey,
             String destinationKey
+    ) {}
+
+    public record AiImage(
+            String mimeType,
+            byte[] content
     ) {}
 
     public MediaService(
@@ -149,15 +154,12 @@ public class MediaService {
             throw new BusinessException(ErrorCode.IMAGE_TOO_LARGE);
         }
 
-        String format = inspectImage(content);
+        // Dùng chung bộ kiểm tra chữ ký file và giải mã JPEG/PNG/WebP.
+        ImageFormatInspector.Result inspected =
+                ImageFormatInspector.inspect(content);
 
-        String extension = format.equals("JPEG")
-                ? ".jpg"
-                : ".png";
-
-        String mimeType = format.equals("JPEG")
-                ? "image/jpeg"
-                : "image/png";
+        String extension = "." + inspected.extension();
+        String mimeType = inspected.mimeType();
 
         // 3. Sinh tên file ngẫu nhiên.
         String objectKey = "staging/listings/"
@@ -206,64 +208,6 @@ public class MediaService {
                         ZoneOffset.UTC
                 )
         );
-    }
-
-    private String inspectImage(byte[] content) {
-        try (ImageInputStream input =
-                     ImageIO.createImageInputStream(
-                             new ByteArrayInputStream(content)
-                     )) {
-
-            if (input == null) {
-                throw new BusinessException(ErrorCode.INVALID_IMAGE);
-            }
-
-            Iterator<ImageReader> readers =
-                    ImageIO.getImageReaders(input);
-
-            if (!readers.hasNext()) {
-                throw new BusinessException(
-                        ErrorCode.UNSUPPORTED_IMAGE_TYPE
-                );
-            }
-
-            ImageReader reader = readers.next();
-
-            try {
-                reader.setInput(input);
-
-                String format = reader.getFormatName()
-                        .toUpperCase(Locale.ROOT);
-
-                if (!format.equals("JPEG")
-                        && !format.equals("PNG")) {
-                    throw new BusinessException(
-                            ErrorCode.UNSUPPORTED_IMAGE_TYPE
-                    );
-                }
-
-                int width = reader.getWidth(0);
-                int height = reader.getHeight(0);
-
-                if (width <= 0 || height <= 0
-                        || (long) width * height > MAX_PIXELS) {
-                    throw new BusinessException(
-                            ErrorCode.INVALID_IMAGE
-                    );
-                }
-
-                // Thử giải mã để phát hiện dữ liệu ảnh bị hỏng.
-                reader.read(0);
-
-                return format;
-
-            } finally {
-                reader.dispose();
-            }
-
-        } catch (IOException | IllegalArgumentException ex) {
-            throw new BusinessException(ErrorCode.INVALID_IMAGE);
-        }
     }
 
     private String signUploadTicket(
@@ -379,7 +323,7 @@ public class MediaService {
 
             // Không cho token tham chiếu tùy ý đến object R2.
             if (!sourceKey.matches(
-                    "staging/listings/[a-f0-9]{32}\\.(jpg|png)"
+                    "staging/listings/[a-f0-9]{32}\\.(jpg|png|webp)"
             )) {
                 throw new BusinessException(
                         ErrorCode.UPLOAD_TOKEN_INVALID
@@ -400,6 +344,7 @@ public class MediaService {
                     || !(
                     "image/jpeg".equals(head.contentType())
                             || "image/png".equals(head.contentType())
+                            || "image/webp".equals(head.contentType())
             )) {
 
                 throw new BusinessException(
@@ -536,5 +481,228 @@ public class MediaService {
         return s3Presigner.presignGetObject(request)
                 .url()
                 .toString();
+    }
+
+    public AiImage readImageForAi(String objectKey) {
+
+        boolean stagingKey = objectKey != null
+                && objectKey.matches(
+                "staging/listings/[a-f0-9]{32}\\.(jpg|png|webp)"
+        );
+
+        boolean listingKey = objectKey != null
+                && objectKey.matches(
+                "listings/[0-9]+/[a-f0-9]{32}\\.(jpg|png|webp)"
+        );
+
+        if (!stagingKey && !listingKey) {
+            throw new BusinessException(
+                    ErrorCode.INVALID_AI_INPUT
+            );
+        }
+
+        try {
+            HeadObjectResponse head = s3Client.headObject(
+                    HeadObjectRequest.builder()
+                            .bucket(r2Bucket)
+                            .key(objectKey)
+                            .build()
+            );
+
+            Long size = head.contentLength();
+            String mimeType = head.contentType();
+
+            if (size == null
+                    || size <= 0
+                    || size > 3L * 1024 * 1024
+                    || !(
+                    "image/jpeg".equals(mimeType)
+                            || "image/png".equals(mimeType)
+                            || "image/webp".equals(mimeType)
+            )) {
+
+                throw new BusinessException(
+                        ErrorCode.INVALID_AI_INPUT
+                );
+            }
+
+            byte[] content = s3Client.getObjectAsBytes(
+                    GetObjectRequest.builder()
+                            .bucket(r2Bucket)
+                            .key(objectKey)
+                            .build()
+            ).asByteArray();
+
+            if (content.length == 0
+                    || content.length > 3L * 1024 * 1024) {
+
+                throw new BusinessException(
+                        ErrorCode.INVALID_AI_INPUT
+                );
+            }
+
+            return new AiImage(mimeType, content);
+
+        } catch (S3Exception ex) {
+
+            if (ex.statusCode() == 404) {
+                throw new BusinessException(
+                        ErrorCode.INVALID_AI_INPUT
+                );
+            }
+
+            throw new BusinessException(
+                    ErrorCode.MEDIA_STORAGE_UNAVAILABLE
+            );
+
+        } catch (SdkException ex) {
+            throw new BusinessException(
+                    ErrorCode.MEDIA_STORAGE_UNAVAILABLE
+            );
+        }
+    }
+
+    private static final class ImageFormatInspector {
+
+        private ImageFormatInspector() {
+        }
+
+        public record Result(
+                String mimeType,
+                String extension
+        ) {}
+
+        public static Result inspect(byte[] content) {
+
+            if (content == null || content.length < 12) {
+                throw invalidImage();
+            }
+
+            Result detected = detectFormat(content);
+
+            try (ImageInputStream input =
+                         new MemoryCacheImageInputStream(
+                                 new ByteArrayInputStream(content)
+                         )) {
+
+                Iterator<ImageReader> readers =
+                        ImageIO.getImageReaders(input);
+
+                if (!readers.hasNext()) {
+                    throw invalidImage();
+                }
+
+                ImageReader reader = readers.next();
+
+                try {
+                    reader.setInput(input, true, true);
+
+                    String readerFormat = reader.getFormatName();
+
+                    boolean matches = switch (detected.extension()) {
+                        case "jpg" ->
+                                "JPEG".equalsIgnoreCase(readerFormat);
+
+                        case "png" ->
+                                "PNG".equalsIgnoreCase(readerFormat);
+
+                        case "webp" ->
+                                "WebP".equalsIgnoreCase(readerFormat);
+
+                        default -> false;
+                    };
+
+                    if (!matches) {
+                        throw invalidImage();
+                    }
+
+                    int width = reader.getWidth(0);
+                    int height = reader.getHeight(0);
+
+                    if (width <= 0
+                            || height <= 0
+                            || (long) width * height > MAX_PIXELS) {
+                        throw invalidImage();
+                    }
+
+                    BufferedImage image = reader.read(0);
+
+                    if (image == null) {
+                        throw invalidImage();
+                    }
+
+                    return detected;
+
+                } finally {
+                    reader.dispose();
+                }
+
+            } catch (IOException | IllegalArgumentException ex) {
+                throw invalidImage();
+            }
+        }
+
+        private static Result detectFormat(byte[] bytes) {
+
+            // JPEG: FF D8 FF
+            if ((bytes[0] & 0xff) == 0xff
+                    && (bytes[1] & 0xff) == 0xd8
+                    && (bytes[2] & 0xff) == 0xff) {
+
+                return new Result("image/jpeg", "jpg");
+            }
+
+            // PNG signature
+            byte[] png = {
+                    (byte) 0x89, 0x50, 0x4e, 0x47,
+                    0x0d, 0x0a, 0x1a, 0x0a
+            };
+
+            boolean isPng = true;
+
+            for (int i = 0; i < png.length; i++) {
+                if (bytes[i] != png[i]) {
+                    isPng = false;
+                    break;
+                }
+            }
+
+            if (isPng) {
+                return new Result("image/png", "png");
+            }
+
+            // WebP: RIFF....WEBP
+            boolean isWebp =
+                    bytes[0] == 'R'
+                            && bytes[1] == 'I'
+                            && bytes[2] == 'F'
+                            && bytes[3] == 'F'
+                            && bytes[8] == 'W'
+                            && bytes[9] == 'E'
+                            && bytes[10] == 'B'
+                            && bytes[11] == 'P';
+
+            if (isWebp) {
+
+                // Không nhận ảnh WebP động ở phiên bản này.
+                // VP8X flags: bit 1 biểu thị animation.
+                if (bytes.length > 20
+                        && bytes[12] == 'V'
+                        && bytes[13] == 'P'
+                        && bytes[14] == '8'
+                        && bytes[15] == 'X'
+                        && (bytes[20] & 0x02) != 0) {
+                    throw invalidImage();
+                }
+
+                return new Result("image/webp", "webp");
+            }
+
+            throw invalidImage();
+        }
+
+        private static BusinessException invalidImage() {
+            return new BusinessException(ErrorCode.INVALID_IMAGE);
+        }
     }
 }

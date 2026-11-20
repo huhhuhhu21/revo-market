@@ -1126,4 +1126,114 @@ public class ListingService {
 
         return Arrays.asList(ordered);
     }
+
+    @Transactional
+    public void delete(
+            Long sellerId,
+            String rawListingId
+    ) {
+        // 1. Kiểm tra listingId.
+        Long listingId;
+
+        try {
+            listingId = Long.parseLong(rawListingId);
+
+            if (listingId <= 0) {
+                throw new NumberFormatException();
+            }
+
+        } catch (NumberFormatException ex) {
+            throw new BusinessException(
+                    ErrorCode.INVALID_LISTING_ID
+            );
+        }
+
+        // 2. Khóa tài khoản người dùng.
+        User seller = userRepository
+                .findByIdForUpdate(sellerId)
+                .orElseThrow(() -> new BusinessException(
+                        ErrorCode.UNAUTHORIZED
+                ));
+
+        if (seller.getRole() != User.Role.USER) {
+            throw new BusinessException(
+                    ErrorCode.FORBIDDEN
+            );
+        }
+
+        if (seller.getStatus() != User.Status.ACTIVE) {
+            throw new BusinessException(
+                    ErrorCode.ACCOUNT_RESTRICTED
+            );
+        }
+
+        // 3. Khóa bài đăng.
+        ProductListing listing = listingRepository
+                .findByIdForUpdate(listingId)
+                .orElseThrow(() -> new BusinessException(
+                        ErrorCode.LISTING_NOT_FOUND
+                ));
+
+        // 4. Kiểm tra quyền sở hữu.
+        if (!listing.getSeller().getId().equals(sellerId)) {
+            throw new BusinessException(
+                    ErrorCode.NOT_LISTING_OWNER
+            );
+        }
+
+        // 5. Bài đã xóa: trả thành công, không xử lý lại.
+        if (listing.isDeleted()) {
+            return;
+        }
+
+        // 6. Không cho xóa bài đang bị ADMIN ẩn.
+        if (listing.isAdminHidden()) {
+            throw new BusinessException(
+                    ErrorCode.LISTING_ADMIN_HIDDEN
+            );
+        }
+
+        // 7. Bài SOLD không thể bị xóa.
+        if (listing.getStatus() == ListingStatus.SOLD) {
+            throw new BusinessException(
+                    ErrorCode.SOLD_LISTING_IMMUTABLE
+            );
+        }
+
+        // 8. Chỉ cho xóa AVAILABLE hoặc HIDDEN hợp lệ.
+        boolean deletable =
+                listing.getStatus() == ListingStatus.AVAILABLE
+                        || (
+                        listing.getStatus() == ListingStatus.HIDDEN
+                                && (
+                                "SELLER".equals(
+                                        listing.getHiddenReasonType()
+                                )
+                                        || "RETURNED".equals(
+                                        listing.getHiddenReasonType()
+                                )
+                        )
+                );
+
+        if (!deletable) {
+            throw new BusinessException(
+                    ErrorCode.LISTING_LOCKED
+            );
+        }
+
+        // 9. Kiểm tra yêu cầu mua và đơn hàng đang xử lý.
+        if (listingRepository.countPendingRequests(listingId) > 0
+                || listingRepository.countActiveOrders(listingId) > 0) {
+
+            throw new BusinessException(
+                    ErrorCode.LISTING_LOCKED
+            );
+        }
+
+        // 10. Xóa logic.
+        listing.softDelete();
+
+        // 11. Ghi thay đổi vào MySQL.
+        listingRepository.saveAndFlush(listing);
+    }
 }

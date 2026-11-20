@@ -169,4 +169,8 @@ public class ProductListing {
             this.ward = ward;
         }
     }
+
+    public void softDelete() {
+        this.deleted = true;
+    }
 }
