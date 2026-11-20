@@ -12,6 +12,7 @@ import com.revo.backend.listing.dto.CreateListingRequest;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
 import java.net.URI;
+import tools.jackson.databind.JsonNode;
 
 @RestController
 @RequestMapping("/api/v1/listings")
@@ -82,5 +83,20 @@ public class ListingController {
         return ResponseEntity
                 .created(location)
                 .body(response);
+    }
+
+    @PatchMapping("/{listingId}")
+    public ListingDetailResponse update(
+            @PathVariable String listingId,
+            @RequestBody JsonNode request,
+            @AuthenticationPrincipal Jwt jwt
+    ) {
+        Long sellerId = Long.parseLong(jwt.getSubject());
+
+        return listingService.update(
+                sellerId,
+                listingId,
+                request
+        );
     }
 }

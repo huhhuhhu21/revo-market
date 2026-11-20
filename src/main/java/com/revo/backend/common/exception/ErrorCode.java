@@ -186,8 +186,23 @@ public enum ErrorCode {
     CONTACT_PHONE_REQUIRED(
             HttpStatus.UNPROCESSABLE_CONTENT,
         "Cần cập nhật số điện thoại liên hệ trước khi đăng bán."
-    );
+    ),
 
+    NOT_LISTING_OWNER(
+            HttpStatus.FORBIDDEN,
+            "Bạn không phải chủ sở hữu bài đăng."
+    ),
+
+
+    LISTING_ADMIN_HIDDEN(
+            HttpStatus.CONFLICT,
+            "Bài đăng đang bị quản trị viên ẩn."
+    ),
+
+    LISTING_NOT_EDITABLE(
+            HttpStatus.CONFLICT,
+            "Trạng thái bài đăng không cho phép chỉnh sửa."
+    );
 
 
     private final HttpStatus httpStatus;
@@ -205,6 +220,7 @@ public enum ErrorCode {
     public String getDefaultMessage() {
         return defaultMessage;
     }
+
 
 
 }

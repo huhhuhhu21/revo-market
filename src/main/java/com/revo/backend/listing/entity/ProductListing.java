@@ -131,4 +131,42 @@ public class ProductListing {
 
         return listing;
     }
+
+    public void applyEditablePatch(
+            String title,
+            String description,
+            Category category,
+            Long listedPrice,
+            ItemCondition itemCondition,
+            String province,
+            String ward
+    ) {
+        if (title != null) {
+            this.title = title;
+        }
+
+        if (description != null) {
+            this.description = description;
+        }
+
+        if (category != null) {
+            this.category = category;
+        }
+
+        if (listedPrice != null) {
+            this.listedPrice = listedPrice;
+        }
+
+        if (itemCondition != null) {
+            this.itemCondition = itemCondition;
+        }
+
+        if (province != null) {
+            this.province = province;
+        }
+
+        if (ward != null) {
+            this.ward = ward;
+        }
+    }
 }

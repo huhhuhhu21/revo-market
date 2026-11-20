@@ -7,6 +7,11 @@ import org.springframework.data.jpa.domain.Specification;
 import org.springframework.data.jpa.repository.*;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
+import jakarta.persistence.LockModeType;
+import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+import java.util.Optional;
 
 public interface ListingRepository
         extends JpaRepository<ProductListing, Long>,
@@ -58,5 +63,15 @@ public interface ListingRepository
     long countViewableOrdersForBuyer(
             @Param("listingId") Long listingId,
             @Param("buyerId") Long buyerId
+    );
+
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("""
+        SELECT p FROM ProductListing p
+        WHERE p.id = :listingId
+        """)
+    Optional<ProductListing> findByIdForUpdate(
+            @Param("listingId") Long listingId
     );
 }

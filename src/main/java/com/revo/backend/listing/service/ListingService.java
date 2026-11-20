@@ -19,9 +19,7 @@ import com.revo.backend.category.CategoryStatus;
 import com.revo.backend.listing.dto.ListingDetailResponse;
 import com.revo.backend.listing.entity.ListingStatus;
 
-import com.revo.backend.auth.entity.User;
 import com.revo.backend.auth.repository.UserRepository;
-import com.revo.backend.category.CategoryStatus;
 import com.revo.backend.category.entity.Category;
 import com.revo.backend.category.repository.CategoryRepository;
 import com.revo.backend.media.service.MediaService;
@@ -33,6 +31,17 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.Objects;
+import java.util.Set;
+import tools.jackson.databind.JsonNode;
+
+import java.util.Arrays;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.List;
+import java.util.ArrayList;
+import java.util.Map;
 import java.util.Set;
 
 @Service
@@ -647,5 +656,474 @@ public class ListingService {
                 listing.getId().toString(),
                 sellerId
         );
+    }
+
+    @Transactional
+    public ListingDetailResponse update(
+            Long sellerId,
+            String rawListingId,
+            JsonNode patch
+    ) {
+        // 1. Kiểm tra cấu trúc PATCH.
+        validatePatchFields(patch);
+
+        Long listingId;
+
+        try {
+            listingId = Long.parseLong(rawListingId);
+
+            if (listingId <= 0) {
+                throw new NumberFormatException();
+            }
+        } catch (NumberFormatException ex) {
+            throw new BusinessException(
+                    ErrorCode.INVALID_LISTING_ID
+            );
+        }
+
+        // 2. Khóa tài khoản trước, cùng thứ tự với B07.
+        User seller = userRepository
+                .findByIdForUpdate(sellerId)
+                .orElseThrow(() -> new BusinessException(
+                        ErrorCode.UNAUTHORIZED
+                ));
+
+        if (seller.getRole() != User.Role.USER) {
+            throw new BusinessException(ErrorCode.FORBIDDEN);
+        }
+
+        if (seller.getStatus() != User.Status.ACTIVE) {
+            throw new BusinessException(
+                    ErrorCode.ACCOUNT_RESTRICTED
+            );
+        }
+
+        if (!seller.isEmailVerified()) {
+            throw new BusinessException(
+                    ErrorCode.ACCOUNT_NOT_VERIFIED
+            );
+        }
+
+        if (seller.getPhone() == null
+                || seller.getPhone().isBlank()) {
+            throw new BusinessException(
+                    ErrorCode.CONTACT_PHONE_REQUIRED
+            );
+        }
+
+        // 3. Khóa bài đăng.
+        ProductListing listing = listingRepository
+                .findByIdForUpdate(listingId)
+                .orElseThrow(() -> new BusinessException(
+                        ErrorCode.LISTING_NOT_FOUND
+                ));
+
+        if (listing.isDeleted()) {
+            throw new BusinessException(
+                    ErrorCode.LISTING_NOT_FOUND
+            );
+        }
+
+        if (!listing.getSeller().getId().equals(sellerId)) {
+            throw new BusinessException(
+                    ErrorCode.NOT_LISTING_OWNER
+            );
+        }
+
+        if (listing.isAdminHidden()) {
+            throw new BusinessException(
+                    ErrorCode.LISTING_ADMIN_HIDDEN
+            );
+        }
+
+        // 4. Chỉ AVAILABLE hoặc HIDDEN hợp lệ được sửa.
+        boolean editable =
+                listing.getStatus() == ListingStatus.AVAILABLE
+                        || (
+                        listing.getStatus() == ListingStatus.HIDDEN
+                                && (
+                                "SELLER".equals(listing.getHiddenReasonType())
+                                        || "RETURNED".equals(listing.getHiddenReasonType())
+                        )
+                );
+
+        if (!editable) {
+            throw new BusinessException(
+                    ErrorCode.LISTING_NOT_EDITABLE
+            );
+        }
+
+        // 5. Không sửa khi có yêu cầu mua hoặc đơn đang xử lý.
+        if (listingRepository.countPendingRequests(listingId) > 0
+                || listingRepository.countActiveOrders(listingId) > 0) {
+            throw new BusinessException(
+                    ErrorCode.LISTING_LOCKED
+            );
+        }
+
+        // 6. Kiểm tra dữ liệu thay đổi.
+        String title = patchText(patch, "title", 100);
+        String description = patchText(patch, "description", 2000);
+        String province = patchText(patch, "province", 100);
+        String ward = patchText(patch, "ward", 100);
+
+        Long price = patchPositiveLong(
+                patch, "listedPrice"
+        );
+
+        ItemCondition condition = patchCondition(patch);
+
+        // Chỉ kiểm tra danh mục ACTIVE nếu client đổi categoryId.
+        Category category = null;
+
+        if (patch.has("categoryId")) {
+            Long newCategoryId = patchPositiveLong(
+                    patch, "categoryId"
+            );
+
+            category = categoryRepository
+                    .findByIdForListing(newCategoryId)
+                    .orElseThrow(() -> new BusinessException(
+                            ErrorCode.CATEGORY_NOT_FOUND
+                    ));
+
+            if (category.getStatus() != CategoryStatus.ACTIVE) {
+                throw new BusinessException(
+                        ErrorCode.CATEGORY_INACTIVE
+                );
+            }
+        }
+
+        // 7. Chuẩn bị danh sách ảnh mới nếu request có images.
+        List<SelectedImage> selectedImages = null;
+
+        if (patch.has("images")) {
+            selectedImages = resolvePatchImages(
+                    listingId,
+                    sellerId,
+                    patch.get("images")
+            );
+        }
+
+        // 8. Cập nhật nội dung bài.
+        listing.applyEditablePatch(
+                title,
+                description,
+                category,
+                price,
+                condition,
+                province,
+                ward
+        );
+
+        // 9. Chỉ thay ảnh nếu client có gửi images.
+        if (selectedImages != null) {
+
+            // Đưa ảnh mới từ staging sang nơi chính thức.
+            for (SelectedImage selected : selectedImages) {
+                if (selected.newTicket() != null) {
+                    mediaService.promoteListingImage(
+                            selected.newTicket()
+                    );
+                }
+            }
+
+            // Xóa quan hệ ảnh cũ trước để tránh vi phạm
+            // UNIQUE(listing_id, sort_order) khi đổi thứ tự.
+            List<ListingImage> oldImages =
+                    imageRepository
+                            .findByListing_IdOrderBySortOrderAsc(
+                                    listingId
+                            );
+
+            imageRepository.deleteAll(oldImages);
+            imageRepository.flush();
+
+            // Tạo lại danh sách quan hệ ảnh cuối cùng.
+            List<ListingImage> replacement = new ArrayList<>();
+
+            for (int i = 0; i < selectedImages.size(); i++) {
+                SelectedImage selected = selectedImages.get(i);
+
+                replacement.add(
+                        ListingImage.create(
+                                listing,
+                                selected.imageUrl(),
+                                i + 1
+                        )
+                );
+            }
+
+            imageRepository.saveAllAndFlush(replacement);
+        }
+
+        // 10. Lưu và trả kết quả.
+        listingRepository.saveAndFlush(listing);
+        entityManager.refresh(listing);
+
+        return getDetail(
+                listingId.toString(),
+                sellerId
+        );
+    }
+
+    private void validatePatchFields(JsonNode patch) {
+        if (patch == null
+                || !patch.isObject()
+                || patch.isEmpty()) {
+            throw new BusinessException(
+                    ErrorCode.VALIDATION_ERROR
+            );
+        }
+
+        Set<String> allowedFields = Set.of(
+                "title",
+                "description",
+                "categoryId",
+                "listedPrice",
+                "itemCondition",
+                "province",
+                "ward",
+                "images"
+        );
+
+        for (String field : patch.propertyNames()) {
+            if (!allowedFields.contains(field)) {
+                throw new BusinessException(
+                        ErrorCode.VALIDATION_ERROR
+                );
+            }
+        }
+    }
+
+    private String patchText(
+            JsonNode patch,
+            String field,
+            int maxLength
+    ) {
+        JsonNode value = patch.get(field);
+
+        if (value == null) {
+            return null;
+        }
+
+        if (!value.isTextual()) {
+            throw new BusinessException(
+                    ErrorCode.VALIDATION_ERROR
+            );
+        }
+
+        String normalized = value.textValue().trim();
+
+        if (normalized.isEmpty()
+                || normalized.length() > maxLength) {
+            throw new BusinessException(
+                    ErrorCode.VALIDATION_ERROR
+            );
+        }
+
+        return normalized;
+    }
+
+    private Long patchPositiveLong(
+            JsonNode patch,
+            String field
+    ) {
+        JsonNode value = patch.get(field);
+
+        if (value == null) {
+            return null;
+        }
+
+        if (!value.isIntegralNumber()
+                || !value.canConvertToLong()
+                || value.longValue() <= 0) {
+            throw new BusinessException(
+                    ErrorCode.VALIDATION_ERROR
+            );
+        }
+
+        return value.longValue();
+    }
+
+    private ItemCondition patchCondition(JsonNode patch) {
+        JsonNode value = patch.get("itemCondition");
+
+        if (value == null) {
+            return null;
+        }
+
+        if (!value.isTextual()) {
+            throw new BusinessException(
+                    ErrorCode.VALIDATION_ERROR
+            );
+        }
+
+        return switch (value.textValue()) {
+            case "NEW" -> ItemCondition.NEW;
+            case "USED" -> ItemCondition.USED;
+            default -> throw new BusinessException(
+                    ErrorCode.VALIDATION_ERROR
+            );
+        };
+    }
+    private record SelectedImage(
+            String imageUrl,
+            MediaService.ListingTicket newTicket
+    ) {}
+
+    private List<SelectedImage> resolvePatchImages(
+            Long listingId,
+            Long sellerId,
+            JsonNode imagesNode
+    ) {
+        // 1. Kiểm tra số lượng ảnh.
+        if (imagesNode == null
+                || !imagesNode.isArray()
+                || imagesNode.size() < 1
+                || imagesNode.size() > 8) {
+            throw new BusinessException(
+                    ErrorCode.INVALID_IMAGE_SET
+            );
+        }
+
+        // 2. Lấy các ảnh thực sự thuộc bài đăng.
+        Map<Long, ListingImage> existingImages =
+                new HashMap<>();
+
+        for (ListingImage image :
+                imageRepository
+                        .findByListing_IdOrderBySortOrderAsc(
+                                listingId
+                        )) {
+            existingImages.put(
+                    image.getId(),
+                    image
+            );
+        }
+
+        Set<Long> usedImageIds = new HashSet<>();
+        Set<String> usedNewKeys = new HashSet<>();
+
+        // Mỗi vị trí tương ứng sortOrder từ 1 đến N.
+        SelectedImage[] ordered =
+                new SelectedImage[imagesNode.size()];
+
+        // 3. Duyệt từng ảnh do client gửi.
+        for (JsonNode imageNode : imagesNode) {
+
+            if (!imageNode.isObject()
+                    || imageNode.size() != 2) {
+                throw new BusinessException(
+                        ErrorCode.INVALID_IMAGE_SET
+                );
+            }
+
+            boolean hasImageId = imageNode.has("imageId");
+            boolean hasUploadToken =
+                    imageNode.has("uploadToken");
+
+            // Bắt buộc đúng một trong hai.
+            if (hasImageId == hasUploadToken) {
+                throw new BusinessException(
+                        ErrorCode.INVALID_IMAGE_SET
+                );
+            }
+
+            JsonNode orderNode = imageNode.get("sortOrder");
+
+            if (orderNode == null || !orderNode.isInt()) {
+                throw new BusinessException(
+                        ErrorCode.INVALID_IMAGE_SET
+                );
+            }
+
+            int sortOrder = orderNode.intValue();
+
+            if (sortOrder < 1
+                    || sortOrder > ordered.length
+                    || ordered[sortOrder - 1] != null) {
+                throw new BusinessException(
+                        ErrorCode.INVALID_IMAGE_SET
+                );
+            }
+
+            SelectedImage selected;
+
+            if (hasImageId) {
+
+                // 4A. Giữ một ảnh đã thuộc bài.
+                JsonNode idNode = imageNode.get("imageId");
+
+                if (!idNode.isIntegralNumber()
+                        || !idNode.canConvertToLong()
+                        || idNode.longValue() <= 0) {
+                    throw new BusinessException(
+                            ErrorCode.INVALID_IMAGE_SET
+                    );
+                }
+
+                Long imageId = idNode.longValue();
+
+                ListingImage existing =
+                        existingImages.get(imageId);
+
+                if (existing == null
+                        || !usedImageIds.add(imageId)) {
+                    throw new BusinessException(
+                            ErrorCode.INVALID_IMAGE_SET
+                    );
+                }
+
+                selected = new SelectedImage(
+                        existing.getImageUrl(),
+                        null
+                );
+
+            } else {
+
+                // 4B. Thêm ảnh mới đã upload bằng B06.
+                JsonNode tokenNode =
+                        imageNode.get("uploadToken");
+
+                if (!tokenNode.isTextual()
+                        || tokenNode.textValue().isBlank()) {
+                    throw new BusinessException(
+                            ErrorCode.INVALID_IMAGE_SET
+                    );
+                }
+
+                MediaService.ListingTicket ticket =
+                        mediaService.validateListingTicket(
+                                tokenNode.textValue(),
+                                sellerId
+                        );
+
+                if (!usedNewKeys.add(
+                        ticket.destinationKey()
+                )) {
+                    throw new BusinessException(
+                            ErrorCode.INVALID_IMAGE_SET
+                    );
+                }
+
+                if (imageRepository.existsByImageUrl(
+                        ticket.destinationKey()
+                )) {
+                    throw new BusinessException(
+                            ErrorCode.UPLOAD_TOKEN_INVALID
+                    );
+                }
+
+                selected = new SelectedImage(
+                        ticket.destinationKey(),
+                        ticket
+                );
+            }
+
+            ordered[sortOrder - 1] = selected;
+        }
+
+        return Arrays.asList(ordered);
     }
 }
