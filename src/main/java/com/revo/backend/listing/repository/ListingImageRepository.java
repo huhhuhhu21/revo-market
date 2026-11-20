@@ -19,4 +19,8 @@ public interface ListingImageRepository
     List<ListingImage> findCoverImages(
             @Param("listingIds") Collection<Long> listingIds
     );
+
+    List<ListingImage> findByListing_IdOrderBySortOrderAsc(
+            Long listingId
+    );
 }

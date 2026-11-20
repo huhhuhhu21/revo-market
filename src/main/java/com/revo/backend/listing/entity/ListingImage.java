@@ -30,4 +30,12 @@ public class ListingImage {
     public String getImageUrl() {
         return imageUrl;
     }
+
+    public Long getId() {
+        return id;
+    }
+
+    public Integer getSortOrder() {
+        return sortOrder;
+    }
 }

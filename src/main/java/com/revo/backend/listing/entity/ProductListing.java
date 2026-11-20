@@ -83,4 +83,24 @@ public class ProductListing {
     public String getWard() { return ward; }
     public ListingStatus getStatus() { return status; }
     public LocalDateTime getCreatedAt() { return createdAt; }
+
+    public String getDescription() {
+        return description;
+    }
+
+    public String getHiddenReasonType() {
+        return hiddenReasonType;
+    }
+
+    public boolean isAdminHidden() {
+        return adminHidden;
+    }
+
+    public boolean isDeleted() {
+        return deleted;
+    }
+
+    public LocalDateTime getUpdatedAt() {
+        return updatedAt;
+    }
 }

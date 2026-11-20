@@ -65,6 +65,9 @@ public class User {
     @Column(name = "login_locked_until")
     private LocalDateTime loginLockedUntil;
 
+    @Column(name = "avatar_url", length = 2048)
+    private String avatarUrl;
+
     protected User() {
     }
 
@@ -78,6 +81,10 @@ public class User {
         this.email = email;
         this.phone = phone;
         this.passwordHash = passwordHash;
+    }
+
+    public String getAvatarUrl() {
+        return avatarUrl;
     }
 
     public Long getId() {

@@ -126,6 +126,16 @@ public enum ErrorCode {
     INVALID_PRICE_RANGE(
             HttpStatus.BAD_REQUEST,
             "Khoảng giá không hợp lệ."
+    ),
+
+    INVALID_LISTING_ID(
+            HttpStatus.BAD_REQUEST,
+        "Mã bài đăng không hợp lệ."
+    ),
+
+    LISTING_NOT_FOUND(
+            HttpStatus.NOT_FOUND,
+        "Không tìm thấy bài đăng."
     );
 
 

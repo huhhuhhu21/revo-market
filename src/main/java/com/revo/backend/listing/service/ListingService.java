@@ -14,6 +14,10 @@ import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
+import com.revo.backend.auth.entity.User;
+import com.revo.backend.category.CategoryStatus;
+import com.revo.backend.listing.dto.ListingDetailResponse;
+import com.revo.backend.listing.entity.ListingStatus;
 
 @Service
 public class ListingService {
@@ -207,5 +211,242 @@ public class ListingService {
         }
 
         return normalized.isEmpty() ? null : normalized;
+    }
+
+    @Transactional(readOnly = true)
+    public ListingDetailResponse getDetail(
+            String rawListingId,
+            Long viewerId
+    ) {
+        // 1. Kiểm tra ID.
+        Long listingId = parseListingId(rawListingId);
+
+        // 2. Tìm bài đăng.
+        ProductListing listing = listingRepository
+                .findById(listingId)
+                .orElseThrow(() -> new BusinessException(
+                        ErrorCode.LISTING_NOT_FOUND
+                ));
+
+        // 3. Bài đã xóa logic không được xem qua B03.
+        if (listing.isDeleted()) {
+            throw new BusinessException(
+                    ErrorCode.LISTING_NOT_FOUND
+            );
+        }
+
+        User seller = listing.getSeller();
+
+        boolean isOwner = viewerId != null
+                && viewerId.equals(seller.getId());
+
+        // 4. Kiểm tra bài đủ điều kiện công khai.
+        boolean publicVisible =
+                !listing.isAdminHidden()
+                        && seller.getStatus() == User.Status.ACTIVE
+                        && (
+                        listing.getStatus() == ListingStatus.AVAILABLE
+                                || listing.getStatus() == ListingStatus.SOLD
+                );
+
+        // 5. Kiểm tra người mua của đơn đang xử lý.
+        boolean isRelatedBuyer = false;
+
+        boolean viewableOrderStatus =
+                listing.getStatus() == ListingStatus.IN_TRANSACTION
+                        || listing.getStatus() == ListingStatus.SOLD;
+
+        if (!isOwner
+                && !publicVisible
+                && !listing.isAdminHidden()
+                && viewableOrderStatus
+                && viewerId != null) {
+
+            isRelatedBuyer =
+                    listingRepository.countViewableOrdersForBuyer(
+                            listingId,
+                            viewerId
+                    ) > 0;
+        }
+
+        // 6. Không đủ quyền thì trả 404.
+        if (!isOwner && !publicVisible && !isRelatedBuyer) {
+            throw new BusinessException(
+                    ErrorCode.LISTING_NOT_FOUND
+            );
+        }
+
+        // 7. Lấy hình ảnh.
+        List<ListingDetailResponse.ImageInfo> images =
+                imageRepository
+                        .findByListing_IdOrderBySortOrderAsc(listingId)
+                        .stream()
+                        .map(image -> new ListingDetailResponse.ImageInfo(
+                                image.getId(),
+                                image.getImageUrl(),
+                                image.getSortOrder()
+                        ))
+                        .toList();
+
+        // 8. Chỉ tính quyền quản lý khi là chủ bài.
+        OwnerActions actions = isOwner
+                ? resolveOwnerActions(listing)
+                : null;
+
+        // 9. Chuyển Entity sang DTO.
+        return new ListingDetailResponse(
+                listing.getId(),
+
+                new ListingDetailResponse.SellerInfo(
+                        seller.getId(),
+                        seller.getFullName(),
+                        seller.getAvatarUrl()
+                ),
+
+                new ListingDetailResponse.CategoryInfo(
+                        listing.getCategory().getId(),
+                        listing.getCategory().getName(),
+                        listing.getCategory().getStatus()
+                ),
+
+                listing.getTitle(),
+                listing.getDescription(),
+                listing.getListedPrice(),
+                listing.getItemCondition(),
+                listing.getProvince(),
+                listing.getWard(),
+                listing.getStatus(),
+                images,
+
+                listing.getCreatedAt().atOffset(ZoneOffset.UTC),
+                listing.getUpdatedAt().atOffset(ZoneOffset.UTC),
+
+                isOwner ? listing.getHiddenReasonType() : null,
+                isOwner ? listing.isAdminHidden() : null,
+                isOwner ? listing.isDeleted() : null,
+
+                isOwner ? actions.canEdit() : null,
+                isOwner ? actions.canHide() : null,
+                isOwner ? actions.canRestore() : null,
+                isOwner ? actions.canDelete() : null,
+                isOwner ? actions.canMarkSold() : null,
+                isOwner ? actions.lockReason() : null
+        );
+    }
+    private static Long parseListingId(String raw) {
+        try {
+            long id = Long.parseLong(raw.trim());
+
+            if (id <= 0) {
+                throw new NumberFormatException();
+            }
+
+            return id;
+
+        } catch (NumberFormatException ex) {
+            throw new BusinessException(
+                    ErrorCode.INVALID_LISTING_ID
+            );
+        }
+    }
+    private record OwnerActions(
+            boolean canEdit,
+            boolean canHide,
+            boolean canRestore,
+            boolean canDelete,
+            boolean canMarkSold,
+            String lockReason
+    ) {}
+
+    private OwnerActions resolveOwnerActions(
+            ProductListing listing
+    ) {
+        boolean activeSeller =
+                listing.getSeller().getStatus() == User.Status.ACTIVE;
+
+        boolean adminHidden = listing.isAdminHidden();
+
+        boolean hasPending =
+                listingRepository.countPendingRequests(
+                        listing.getId()
+                ) > 0;
+
+        boolean hasActiveOrder =
+                listingRepository.countActiveOrders(
+                        listing.getId()
+                ) > 0;
+
+        boolean unlocked =
+                activeSeller
+                        && !adminHidden
+                        && !hasPending
+                        && !hasActiveOrder;
+
+        boolean available =
+                listing.getStatus() == ListingStatus.AVAILABLE;
+
+        boolean hidden =
+                listing.getStatus() == ListingStatus.HIDDEN;
+
+        boolean restorableReason = hidden
+                && (
+                "SELLER".equals(listing.getHiddenReasonType())
+                        || "RETURNED".equals(listing.getHiddenReasonType())
+        );
+
+        boolean hasContactPhone =
+                listing.getSeller().getPhone() != null
+                        && !listing.getSeller().getPhone().isBlank();
+
+        boolean categoryActive =
+                listing.getCategory().getStatus()
+                        == CategoryStatus.ACTIVE;
+
+        boolean canEdit =
+                unlocked && (available || restorableReason);
+
+        boolean canHide =
+                unlocked && available;
+
+        boolean canRestore =
+                unlocked
+                        && restorableReason
+                        && hasContactPhone
+                        && categoryActive;
+
+        boolean canDelete =
+                canEdit;
+
+        // Có thể kết thúc yêu cầu PENDING khi mark-sold.
+        boolean canMarkSold =
+                activeSeller
+                        && !adminHidden
+                        && !hasActiveOrder
+                        && available;
+
+        String lockReason = null;
+
+        if (adminHidden) {
+            lockReason = "Bài đăng đang bị ADMIN ẩn.";
+        } else if (!activeSeller) {
+            lockReason = "Tài khoản không đủ quyền thao tác.";
+        } else if (hasPending || hasActiveOrder) {
+            lockReason = "Bài đang có yêu cầu mua hoặc đơn xử lý.";
+        } else if (listing.getStatus() == ListingStatus.SOLD) {
+            lockReason = "Bài đã bán không thể chỉnh sửa.";
+        } else if (restorableReason && !categoryActive) {
+            lockReason = "Danh mục đã ngừng hoạt động.";
+        } else if (restorableReason && !hasContactPhone) {
+            lockReason = "Cần cập nhật số điện thoại liên hệ.";
+        }
+
+        return new OwnerActions(
+                canEdit,
+                canHide,
+                canRestore,
+                canDelete,
+                canMarkSold,
+                lockReason
+        );
     }
 }

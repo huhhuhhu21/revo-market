@@ -4,6 +4,9 @@ import com.revo.backend.listing.dto.*;
 import com.revo.backend.listing.service.ListingService;
 
 import org.springframework.web.bind.annotation.*;
+import com.revo.backend.listing.dto.ListingDetailResponse;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.oauth2.jwt.Jwt;
 
 @RestController
 @RequestMapping("/api/v1/listings")
@@ -40,5 +43,20 @@ public class ListingController {
         );
 
         return listingService.search(request);
+    }
+
+    @GetMapping("/{listingId}")
+    public ListingDetailResponse getDetail(
+            @PathVariable String listingId,
+            @AuthenticationPrincipal Jwt jwt
+    ) {
+        Long viewerId = jwt == null
+                ? null
+                : Long.parseLong(jwt.getSubject());
+
+        return listingService.getDetail(
+                listingId,
+                viewerId
+        );
     }
 }
