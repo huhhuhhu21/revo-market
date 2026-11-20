@@ -285,6 +285,11 @@ public enum ErrorCode {
             "Yêu cầu này không chấp nhận dữ liệu trong body."
     ),
 
+    INVALID_ROLE_FILTER(
+            HttpStatus.BAD_REQUEST,
+            "Vai trò lọc đơn hàng không hợp lệ."
+    ),
+
     INVALID_STATUS_FILTER(
             HttpStatus.BAD_REQUEST,
             "Trạng thái lọc không hợp lệ."

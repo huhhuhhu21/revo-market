@@ -69,6 +69,9 @@ public class Order {
     @Column(name = "updated_at", nullable = false)
     private LocalDateTime updatedAt;
 
+    @Column(name = "delivered_at")
+    private LocalDateTime deliveredAt;
+
     protected Order() {}
 
     public static Order fromAcceptedRequest(
@@ -136,5 +139,25 @@ public class Order {
 
     public LocalDateTime getCreatedAt() {
         return createdAt;
+    }
+
+    public ProductListing getListing() {
+        return listing;
+    }
+
+    public User getBuyer() {
+        return buyer;
+    }
+
+    public User getSeller() {
+        return seller;
+    }
+
+    public LocalDateTime getUpdatedAt() {
+        return updatedAt;
+    }
+
+    public LocalDateTime getDeliveredAt() {
+        return deliveredAt;
     }
 }
