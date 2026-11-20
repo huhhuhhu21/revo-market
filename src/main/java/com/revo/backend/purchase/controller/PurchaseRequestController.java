@@ -14,7 +14,12 @@ import com.revo.backend.purchase.dto.SentPurchaseRequestPage;
 import com.revo.backend.purchase.dto.SentPurchaseRequestItem;
 import com.revo.backend.purchase.dto.ReceivedPurchaseRequestItem;
 import java.util.List;
+import com.revo.backend.purchase.dto.AcceptPurchaseRequestResponse;
+import com.revo.backend.common.exception.BusinessException;
+import com.revo.backend.common.exception.ErrorCode;
 
+import java.net.URI;
+import java.util.Map;
 @RestController
 @RequestMapping("/api/v1/purchase-requests")
 public class PurchaseRequestController {
@@ -55,5 +60,52 @@ public class PurchaseRequestController {
         Long sellerId = Long.parseLong(jwt.getSubject());
 
         return service.getReceivedRequests(sellerId, status);
+    }
+
+    @GetMapping("/{requestId}")
+    public PurchaseRequestResponse getDetail(
+            @PathVariable String requestId,
+            @AuthenticationPrincipal Jwt jwt
+    ) {
+        Long currentUserId = Long.parseLong(jwt.getSubject());
+
+        return service.getDetail(
+                currentUserId,
+                requestId
+        );
+    }
+
+    @PostMapping("/{requestId}/accept")
+    public ResponseEntity<AcceptPurchaseRequestResponse> accept(
+            @PathVariable String requestId,
+            @RequestBody(required = false) Map<String, Object> body,
+            @AuthenticationPrincipal Jwt jwt
+    ) {
+        // Không cho phép Flutter tự gửi giá, sellerId,
+        // buyerId hoặc địa chỉ mới.
+        if (body != null && !body.isEmpty()) {
+            throw new BusinessException(
+                    ErrorCode.INVALID_REQUEST_BODY
+            );
+        }
+
+        Long sellerId = Long.parseLong(jwt.getSubject());
+
+        PurchaseRequestService.AcceptResult result =
+                service.accept(sellerId, requestId);
+
+        if (result.created()) {
+            return ResponseEntity
+                    .created(
+                            URI.create(
+                                    "/api/v1/orders/"
+                                            + result.body().order().id()
+                            )
+                    )
+                    .body(result.body());
+        }
+
+        // Retry: trả cùng đơn, HTTP 200.
+        return ResponseEntity.ok(result.body());
     }
 }

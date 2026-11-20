@@ -1,21 +1,20 @@
 package com.revo.backend.purchase.repository;
 
 import com.revo.backend.purchase.entity.PurchaseRequest;
-import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.data.jpa.repository.Modifying;
-import org.springframework.data.jpa.repository.Query;
+import com.revo.backend.purchase.entity.PurchaseRequestStatus;
+import jakarta.persistence.LockModeType;
+import org.springframework.data.jpa.repository.*;
 import org.springframework.data.repository.query.Param;
 
 import java.time.LocalDateTime;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
-import org.springframework.data.jpa.repository.EntityGraph;
-import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 
 import java.util.List;
 import org.springframework.data.jpa.repository.EntityGraph;
 import java.util.List;
+import java.util.Optional;
 public interface PurchaseRequestRepository
         extends JpaRepository<PurchaseRequest, Long>,
         JpaSpecificationExecutor<PurchaseRequest> {
@@ -95,5 +94,83 @@ public interface PurchaseRequestRepository
     List<PurchaseRequest> findByListing_Seller_IdOrderByCreatedAtDescIdDesc(
             Long sellerId
     );
+
+    // Chỉ đọc listingId để biết cần khóa bài nào trước.
+// Chưa khóa request tại bước này.
+    @Query("""
+        SELECT p.listing.id
+        FROM PurchaseRequest p
+        WHERE p.id = :requestId
+        """)
+    Optional<Long> findListingIdByRequestId(
+            @Param("requestId") Long requestId
+    );
+
+    // Chỉ được gọi sau khi transaction đã khóa listing.
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("""
+        SELECT p
+        FROM PurchaseRequest p
+        WHERE p.id = :requestId
+        """)
+    Optional<PurchaseRequest> findByIdForUpdate(
+            @Param("requestId") Long requestId
+    );
+
+    // Tìm những người mua khác đang chờ xác nhận.
+    @Query("""
+        SELECT p.buyer.id
+        FROM PurchaseRequest p
+        WHERE p.listing.id = :listingId
+          AND p.id <> :acceptedRequestId
+          AND p.status = :pendingStatus
+        """)
+    List<Long> findOtherPendingBuyerIds(
+            @Param("listingId") Long listingId,
+            @Param("acceptedRequestId") Long acceptedRequestId,
+            @Param("pendingStatus") PurchaseRequestStatus pendingStatus
+    );
+
+    @Modifying(flushAutomatically = true)
+    @Query(value = """
+        UPDATE purchase_requests
+        SET status = 'REJECTED'
+        WHERE listing_id = :listingId
+          AND id <> :acceptedRequestId
+          AND status = 'PENDING'
+        """, nativeQuery = true)
+    int rejectOtherPending(
+            @Param("listingId") Long listingId,
+            @Param("acceptedRequestId") Long acceptedRequestId
+    );
+
+    @Query("""
+        SELECT p.id
+        FROM PurchaseRequest p
+        WHERE p.listing.id = :listingId
+          AND p.buyer.id = :buyerId
+          AND p.id <> :acceptedRequestId
+          AND p.status = :pendingStatus
+        """)
+    List<Long> findOtherPendingRequestIds(
+            @Param("listingId") Long listingId,
+            @Param("buyerId") Long buyerId,
+            @Param("acceptedRequestId") Long acceptedRequestId,
+            @Param("pendingStatus") PurchaseRequestStatus pendingStatus
+    );
+
+    @Query("""
+        SELECT p.id, p.buyer.id
+        FROM PurchaseRequest p
+        WHERE p.listing.id = :listingId
+          AND p.id <> :acceptedRequestId
+          AND p.status = :pendingStatus
+        """)
+    List<Object[]> findOtherPendingRecipients(
+            @Param("listingId") Long listingId,
+            @Param("acceptedRequestId") Long acceptedRequestId,
+            @Param("pendingStatus") PurchaseRequestStatus pendingStatus
+    );
+
 
 }

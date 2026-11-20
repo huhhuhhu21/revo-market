@@ -173,4 +173,18 @@ public class ProductListing {
     public void softDelete() {
         this.deleted = true;
     }
+
+    public void markInTransaction() {
+        if (getStatus() != ListingStatus.AVAILABLE
+                || getHiddenReasonType() != null
+                || isAdminHidden()
+                || isDeleted()) {
+
+            throw new IllegalStateException(
+                    "Listing is not available for transaction"
+            );
+        }
+
+        this.status = ListingStatus.IN_TRANSACTION;
+    }
 }

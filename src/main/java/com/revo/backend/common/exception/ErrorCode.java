@@ -250,6 +250,41 @@ public enum ErrorCode {
             "Cần có số điện thoại liên hệ để giao dịch."
     ),
 
+    INVALID_REQUEST_ID(
+            HttpStatus.BAD_REQUEST,
+            "ID yêu cầu mua không hợp lệ."
+    ),
+
+    PURCHASE_REQUEST_NOT_FOUND(
+            HttpStatus.NOT_FOUND,
+            "Không tìm thấy yêu cầu mua."
+    ),
+
+    PURCHASE_REQUEST_NOT_PENDING(
+            HttpStatus.CONFLICT,
+            "Yêu cầu mua không còn ở trạng thái chờ xác nhận."
+    ),
+
+    PURCHASE_REQUEST_EXPIRED(
+            HttpStatus.CONFLICT,
+            "Yêu cầu mua đã hết thời hạn xử lý."
+    ),
+
+    ORDER_ALREADY_EXISTS(
+            HttpStatus.CONFLICT,
+            "Sản phẩm đã có đơn hàng đang xử lý."
+    ),
+
+    PARTICIPANT_NOT_ELIGIBLE(
+            HttpStatus.CONFLICT,
+            "Người mua hoặc người bán không đủ điều kiện giao dịch."
+    ),
+
+    INVALID_REQUEST_BODY(
+            HttpStatus.BAD_REQUEST,
+            "Yêu cầu này không chấp nhận dữ liệu trong body."
+    ),
+
     INVALID_STATUS_FILTER(
             HttpStatus.BAD_REQUEST,
             "Trạng thái lọc không hợp lệ."
@@ -272,7 +307,5 @@ public enum ErrorCode {
     public String getDefaultMessage() {
         return defaultMessage;
     }
-
-
 
 }

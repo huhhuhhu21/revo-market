@@ -101,4 +101,15 @@ public class PurchaseRequest {
     public LocalDateTime getCreatedAt() { return createdAt; }
     public LocalDateTime getRespondedAt() { return respondedAt; }
     public LocalDateTime getExpiresAt() { return expiresAt; }
+
+    public void accept(LocalDateTime now) {
+        if (this.status != PurchaseRequestStatus.PENDING) {
+            throw new IllegalStateException(
+                    "Purchase request is not pending"
+            );
+        }
+
+        this.status = PurchaseRequestStatus.ACCEPTED;
+        this.respondedAt = now;
+    }
 }

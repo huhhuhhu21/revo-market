@@ -45,4 +45,20 @@ public class Notification {
         notification.refId = requestId;
         return notification;
     }
+
+    public static Notification purchaseRequestUpdated(
+            User buyer,
+            Long requestId,
+            String content
+    ) {
+        Notification notification = new Notification();
+
+        notification.user = buyer;
+        notification.type = "PURCHASE_REQUEST_UPDATED";
+        notification.content = content;
+        notification.refType = "PURCHASE_REQUEST";
+        notification.refId = requestId;
+
+        return notification;
+    }
 }

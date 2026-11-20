@@ -47,7 +47,15 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import com.revo.backend.order.entity.Order;
+import com.revo.backend.order.repository.OrderRepository;
+import com.revo.backend.purchase.dto.AcceptPurchaseRequestResponse;
+import com.revo.backend.purchase.entity.PurchaseRequestStatus;
 
+import java.util.List;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 
 @Service
 public class PurchaseRequestService {
@@ -60,18 +68,26 @@ public class PurchaseRequestService {
             Long orderId,
             String status
     ) {}
+    private final OrderRepository orderRepository;
 
     public PurchaseRequestService(
             UserRepository userRepository,
             ListingRepository listingRepository,
             PurchaseRequestRepository purchaseRequestRepository,
-            NotificationRepository notificationRepository
+            NotificationRepository notificationRepository,
+            OrderRepository orderRepository
     ) {
         this.userRepository = userRepository;
         this.listingRepository = listingRepository;
         this.purchaseRequestRepository = purchaseRequestRepository;
         this.notificationRepository = notificationRepository;
+        this.orderRepository = orderRepository;
     }
+
+    public record AcceptResult(
+            AcceptPurchaseRequestResponse body,
+            boolean created
+    ) {}
 
     @Transactional
     public PurchaseRequestResponse create(Long buyerId, CreatePurchaseRequestRequest input) {
@@ -430,4 +446,454 @@ public class PurchaseRequestService {
                 detailAccessible
         );
     }
+
+    @Transactional(readOnly = true)
+    public PurchaseRequestResponse getDetail(
+            Long currentUserId,
+            String rawRequestId
+    ) {
+        // 1. Kiểm tra requestId.
+        Long requestId = parseRequestId(rawRequestId);
+
+        // 2. Tìm yêu cầu mua.
+        PurchaseRequest request = purchaseRequestRepository
+                .findById(requestId)
+                .orElseThrow(() -> new BusinessException(
+                        ErrorCode.PURCHASE_REQUEST_NOT_FOUND
+                ));
+
+        ProductListing listing = request.getListing();
+        User buyer = request.getBuyer();
+        User seller = listing.getSeller();
+
+        // 3. Chỉ đúng người mua hoặc người bán
+        // được xem thông tin yêu cầu.
+        boolean isBuyer =
+                buyer.getId().equals(currentUserId)
+                        && buyer.getRole() == User.Role.USER;
+
+        boolean isSeller =
+                seller.getId().equals(currentUserId)
+                        && seller.getRole() == User.Role.USER;
+
+        if (!isBuyer && !isSeller) {
+            throw new BusinessException(
+                    ErrorCode.PURCHASE_REQUEST_NOT_FOUND
+            );
+        }
+
+        // 4. Xác định trạng thái hiệu lực.
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+
+        PurchaseRequestStatus status =
+                effectiveStatus(request, now);
+
+        // 5. Lấy đơn liên quan nếu yêu cầu đã được
+        // chấp nhận ở C05.
+        OrderLink orderLink = loadOrderLinks(
+                List.of(request)
+        ).get(requestId);
+
+        // 6. Xác định quyền mở bài đăng hiện tại.
+        PurchaseRequestResponse.ListingRef listingRef;
+
+        if (isSeller) {
+            // Chủ bài có thể xem bài tự ẩn,
+            // nhưng không hiển thị bài đã xóa
+            // hoặc đang bị ADMIN ẩn vi phạm.
+            boolean detailAccessible =
+                    !listing.isDeleted()
+                            && !listing.isAdminHidden();
+
+            listingRef = new PurchaseRequestResponse.ListingRef(
+                    listing.getId(),
+                    detailAccessible ? listing.getTitle() : null,
+                    detailAccessible
+            );
+
+        } else {
+            // Tái sử dụng cách kiểm tra quyền xem bài
+            // đã triển khai cho người mua ở C02.
+            listingRef = listingRefForBuyer(
+                    request,
+                    orderLink
+            );
+        }
+
+        // 7. Kiểm tra quyền phản hồi.
+        boolean pending =
+                status == PurchaseRequestStatus.PENDING;
+
+        boolean listingAvailable =
+                listing.getStatus() == ListingStatus.AVAILABLE
+                        && !listing.isDeleted()
+                        && !listing.isAdminHidden()
+                        && listing.getHiddenReasonType() == null;
+
+        boolean sellerEligible = isEligible(seller);
+
+        boolean canRespond =
+                isSeller
+                        && pending
+                        && listingAvailable
+                        && sellerEligible;
+
+        // Nếu có đơn đang xử lý, không cho phép
+        // tiếp tục phản hồi yêu cầu mua.
+        if (canRespond
+                && listingRepository.countActiveOrders(
+                listing.getId()
+        ) > 0) {
+
+            canRespond = false;
+        }
+
+        boolean canReject = canRespond;
+
+        boolean canAccept =
+                canRespond
+                        && isEligible(buyer);
+
+        boolean canWithdraw =
+                isBuyer && pending;
+
+        // 8. Trả DTO đầy đủ.
+        return new PurchaseRequestResponse(
+                request.getId(),
+
+                listingRef,
+
+                new PurchaseRequestResponse.Party(
+                        buyer.getId(),
+                        buyer.getFullName()
+                ),
+
+                new PurchaseRequestResponse.Party(
+                        seller.getId(),
+                        seller.getFullName()
+                ),
+
+                request.getOfferedPrice(),
+                request.getNote(),
+                status,
+
+                new PurchaseRequestResponse.DeliveryContact(
+                        request.getRecipientName(),
+                        request.getRecipientPhone(),
+                        request.getDeliveryAddressLine(),
+                        request.getDeliveryProvince(),
+                        request.getDeliveryWard()
+                ),
+
+                request.getCreatedAt().atOffset(
+                        ZoneOffset.UTC
+                ),
+
+                request.getExpiresAt().atOffset(
+                        ZoneOffset.UTC
+                ),
+
+                request.getRespondedAt() == null
+                        ? null
+                        : request.getRespondedAt().atOffset(
+                        ZoneOffset.UTC
+                ),
+
+                orderLink == null
+                        ? null
+                        : orderLink.orderId(),
+
+                canAccept,
+                canReject,
+                canWithdraw
+        );
+    }
+
+    private static Long parseRequestId(String rawRequestId) {
+
+        if (rawRequestId == null
+                || !rawRequestId.matches("[0-9]+")) {
+
+            throw new BusinessException(
+                    ErrorCode.INVALID_REQUEST_ID
+            );
+        }
+
+        try {
+            long requestId = Long.parseLong(rawRequestId);
+
+            if (requestId <= 0) {
+                throw new BusinessException(
+                        ErrorCode.INVALID_REQUEST_ID
+                );
+            }
+
+            return requestId;
+
+        } catch (NumberFormatException ex) {
+            throw new BusinessException(
+                    ErrorCode.INVALID_REQUEST_ID
+            );
+        }
+    }
+
+    @Transactional
+    public AcceptResult accept(
+            Long currentUserId,
+            String rawRequestId
+    ) {
+        // Dùng helper đã bổ sung ở C04.
+        Long requestId = parseRequestId(rawRequestId);
+
+        // 1. Đọc listingId trước để thống nhất thứ tự khóa.
+        Long listingId = purchaseRequestRepository
+                .findListingIdByRequestId(requestId)
+                .orElseThrow(() -> new BusinessException(
+                        ErrorCode.PURCHASE_REQUEST_NOT_FOUND
+                ));
+
+        // 2. Khóa bài đăng.
+        ProductListing listing = listingRepository
+                .findByIdForUpdate(listingId)
+                .orElseThrow(() -> new BusinessException(
+                        ErrorCode.PURCHASE_REQUEST_NOT_FOUND
+                ));
+
+        // 3. Khóa yêu cầu mua.
+        PurchaseRequest request = purchaseRequestRepository
+                .findByIdForUpdate(requestId)
+                .orElseThrow(() -> new BusinessException(
+                        ErrorCode.PURCHASE_REQUEST_NOT_FOUND
+                ));
+
+        User seller = listing.getSeller();
+
+        // 4. Chỉ chủ bài là USER mới có quyền chấp nhận.
+        if (!seller.getId().equals(currentUserId)
+                || seller.getRole() != User.Role.USER) {
+
+            throw new BusinessException(
+                    ErrorCode.NOT_LISTING_OWNER
+            );
+        }
+
+        // 5. Idempotency: đã chấp nhận thì trả đúng đơn cũ.
+        // Không kiểm tra hạn hoặc tạo lại đơn ở nhánh này.
+        if (request.getStatus()
+                == PurchaseRequestStatus.ACCEPTED) {
+
+            Order existingOrder = orderRepository
+                    .findByPurchaseRequest_Id(requestId)
+                    .orElseThrow(() -> new IllegalStateException(
+                            "Accepted request has no order: " + requestId
+                    ));
+
+            return new AcceptResult(
+                    toAcceptResponse(request, existingOrder),
+                    false
+            );
+        }
+
+        // 6. Chỉ PENDING mới được chuyển sang ACCEPTED.
+        if (request.getStatus()
+                != PurchaseRequestStatus.PENDING) {
+
+            throw new BusinessException(
+                    ErrorCode.PURCHASE_REQUEST_NOT_PENDING
+            );
+        }
+
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC)
+                .truncatedTo(ChronoUnit.MILLIS);
+
+        // Đúng mốc expiresAt vẫn được chấp nhận.
+        if (now.isAfter(request.getExpiresAt())) {
+            throw new BusinessException(
+                    ErrorCode.PURCHASE_REQUEST_EXPIRED
+            );
+        }
+
+        // 7. Kiểm tra tư cách các bên.
+        User buyer = request.getBuyer();
+
+        if (seller.getStatus() != User.Status.ACTIVE) {
+            throw new BusinessException(
+                    ErrorCode.ACCOUNT_RESTRICTED
+            );
+        }
+
+        if (!isEligible(seller) || !isEligible(buyer)) {
+            throw new BusinessException(
+                    ErrorCode.PARTICIPANT_NOT_ELIGIBLE
+            );
+        }
+
+        // 8. Kiểm tra tình trạng bài.
+        if (listing.getStatus() != ListingStatus.AVAILABLE
+                || listing.isDeleted()
+                || listing.isAdminHidden()
+                || listing.getHiddenReasonType() != null) {
+
+            throw new BusinessException(
+                    ErrorCode.LISTING_NOT_AVAILABLE
+            );
+        }
+
+        if (listingRepository.countActiveOrders(listingId) > 0) {
+            throw new BusinessException(
+                    ErrorCode.ORDER_ALREADY_EXISTS
+            );
+        }
+
+        // 9. Không lấy địa chỉ mới từ users hoặc request body.
+        // Phải sử dụng snapshot cố định ở purchase_requests.
+        if (!hasValidDeliverySnapshot(request)) {
+            throw new BusinessException(
+                    ErrorCode.PARTICIPANT_NOT_ELIGIBLE
+            );
+        }
+
+        // 10. Ghi nhận các người mua còn PENDING để thông báo.
+        List<Object[]> otherRecipients =
+                purchaseRequestRepository.findOtherPendingRecipients(
+                        listingId,
+                        requestId,
+                        PurchaseRequestStatus.PENDING
+                );
+
+        // 11. Đổi trạng thái yêu cầu và bài đăng.
+        request.accept(now);
+        listing.markInTransaction();
+
+        // 12. Tạo đơn với giá và địa chỉ cố định từ yêu cầu.
+        Order newOrder = Order.fromAcceptedRequest(
+                request,
+                seller,
+                now
+        );
+
+        try {
+            newOrder = orderRepository.saveAndFlush(newOrder);
+        } catch (DataIntegrityViolationException ex) {
+
+            // Ràng buộc DB vẫn bảo vệ khi có race condition.
+            if (isOrderUniqueConflict(ex)) {
+                throw new BusinessException(
+                        ErrorCode.ORDER_ALREADY_EXISTS
+                );
+            }
+
+            throw ex;
+        }
+
+        // 13. Từ chối toàn bộ yêu cầu PENDING còn lại.
+        purchaseRequestRepository.rejectOtherPending(
+                listingId,
+                requestId
+        );
+
+        // 14. Thông báo người mua được chấp nhận.
+        notificationRepository.save(
+                Notification.purchaseRequestUpdated(
+                        buyer,
+                        requestId,
+                        "Yêu cầu mua của bạn đã được chấp nhận."
+                )
+        );
+
+        // 15. Thông báo những người mua khác.
+        for (Object[] row : otherRecipients) {
+
+            Long otherRequestId = (Long) row[0];
+            Long otherBuyerId = (Long) row[1];
+
+            User otherBuyer = userRepository.getReferenceById(
+                    otherBuyerId
+            );
+
+            notificationRepository.save(
+                    Notification.purchaseRequestUpdated(
+                            otherBuyer,
+                            otherRequestId,
+                            "Yêu cầu mua của bạn đã bị từ chối "
+                                    + "vì sản phẩm đã có giao dịch."
+                    )
+            );
+        }
+
+        // Toàn bộ các thay đổi được commit cùng transaction.
+        return new AcceptResult(
+                toAcceptResponse(request, newOrder),
+                true
+        );
+    }
+    private static boolean hasValidDeliverySnapshot(
+            PurchaseRequest request
+    ) {
+        String phone = requiredText(request.getRecipientPhone());
+
+        return !requiredText(request.getRecipientName()).isEmpty()
+                && !requiredText(
+                request.getDeliveryAddressLine()
+        ).isEmpty()
+                && !requiredText(
+                request.getDeliveryProvince()
+        ).isEmpty()
+                && !requiredText(
+                request.getDeliveryWard()
+        ).isEmpty()
+                && phone.matches("(?:0\\d{9}|\\+84\\d{9})");
+    }
+
+    private static boolean isOrderUniqueConflict(
+            DataIntegrityViolationException ex
+    ) {
+        Throwable cause = ex;
+
+        while (cause != null) {
+            if (cause instanceof SQLException sql
+                    && sql.getErrorCode() == 1062
+                    && sql.getMessage() != null) {
+
+                String message = sql.getMessage();
+
+                if (message.contains("uq_orders_request")
+                        || message.contains(
+                        "uq_orders_active_listing"
+                )) {
+
+                    return true;
+                }
+            }
+
+            cause = cause.getCause();
+        }
+
+        return false;
+    }
+
+    private static AcceptPurchaseRequestResponse toAcceptResponse(
+            PurchaseRequest request,
+            Order order
+    ) {
+        LocalDateTime createdAt = order.getCreatedAt();
+
+        return new AcceptPurchaseRequestResponse(
+                request.getId(),
+                PurchaseRequestStatus.ACCEPTED,
+                new AcceptPurchaseRequestResponse.OrderSummary(
+                        order.getId(),
+                        order.getStatus(),
+                        order.getCodStatus(),
+                        order.getTransactionPrice(),
+                        order.getShippingFee(),
+                        order.getCodAmount(),
+                        createdAt.atOffset(ZoneOffset.UTC),
+                        createdAt.plusHours(48)
+                                .atOffset(ZoneOffset.UTC)
+                )
+        );
+    }
+
+
 }
