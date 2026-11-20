@@ -8,6 +8,11 @@ import com.revo.backend.listing.dto.ListingDetailResponse;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 
+import com.revo.backend.listing.dto.CreateListingRequest;
+import jakarta.validation.Valid;
+import org.springframework.http.ResponseEntity;
+import java.net.URI;
+
 @RestController
 @RequestMapping("/api/v1/listings")
 public class ListingController {
@@ -58,5 +63,24 @@ public class ListingController {
                 listingId,
                 viewerId
         );
+    }
+
+    @PostMapping
+    public ResponseEntity<ListingDetailResponse> create(
+            @Valid @RequestBody CreateListingRequest request,
+            @AuthenticationPrincipal Jwt jwt
+    ) {
+        Long sellerId = Long.parseLong(jwt.getSubject());
+
+        ListingDetailResponse response =
+                listingService.create(sellerId, request);
+
+        URI location = URI.create(
+                "/api/v1/listings/" + response.id()
+        );
+
+        return ResponseEntity
+                .created(location)
+                .body(response);
     }
 }

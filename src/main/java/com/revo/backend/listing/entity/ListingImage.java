@@ -38,4 +38,18 @@ public class ListingImage {
     public Integer getSortOrder() {
         return sortOrder;
     }
+
+    public static ListingImage create(
+            ProductListing listing,
+            String imageUrl,
+            int sortOrder
+    ) {
+        ListingImage image = new ListingImage();
+
+        image.listing = listing;
+        image.imageUrl = imageUrl;
+        image.sortOrder = sortOrder;
+
+        return image;
+    }
 }

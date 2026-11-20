@@ -103,4 +103,32 @@ public class ProductListing {
     public LocalDateTime getUpdatedAt() {
         return updatedAt;
     }
+    public static ProductListing create(
+            User seller,
+            Category category,
+            String title,
+            String description,
+            Long listedPrice,
+            ItemCondition itemCondition,
+            String province,
+            String ward
+    ) {
+        ProductListing listing = new ProductListing();
+
+        listing.seller = seller;
+        listing.category = category;
+        listing.title = title;
+        listing.description = description;
+        listing.listedPrice = listedPrice;
+        listing.itemCondition = itemCondition;
+        listing.province = province;
+        listing.ward = ward;
+
+        listing.status = ListingStatus.AVAILABLE;
+        listing.hiddenReasonType = null;
+        listing.adminHidden = false;
+        listing.deleted = false;
+
+        return listing;
+    }
 }

@@ -19,6 +19,22 @@ import com.revo.backend.category.CategoryStatus;
 import com.revo.backend.listing.dto.ListingDetailResponse;
 import com.revo.backend.listing.entity.ListingStatus;
 
+import com.revo.backend.auth.entity.User;
+import com.revo.backend.auth.repository.UserRepository;
+import com.revo.backend.category.CategoryStatus;
+import com.revo.backend.category.entity.Category;
+import com.revo.backend.category.repository.CategoryRepository;
+import com.revo.backend.media.service.MediaService;
+import com.revo.backend.listing.dto.CreateListingRequest;
+
+import jakarta.persistence.EntityManager;
+
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashSet;
+import java.util.Objects;
+import java.util.Set;
+
 @Service
 public class ListingService {
 
@@ -27,13 +43,25 @@ public class ListingService {
 
     private final ListingRepository listingRepository;
     private final ListingImageRepository imageRepository;
+    private final UserRepository userRepository;
+    private final CategoryRepository categoryRepository;
+    private final MediaService mediaService;
+    private final EntityManager entityManager;
 
     public ListingService(
             ListingRepository listingRepository,
-            ListingImageRepository imageRepository
+            ListingImageRepository imageRepository,
+            UserRepository userRepository,
+            CategoryRepository categoryRepository,
+            MediaService mediaService,
+            EntityManager entityManager
     ) {
         this.listingRepository = listingRepository;
         this.imageRepository = imageRepository;
+        this.userRepository = userRepository;
+        this.categoryRepository = categoryRepository;
+        this.mediaService = mediaService;
+        this.entityManager = entityManager;
     }
 
     @Transactional(readOnly = true)
@@ -95,7 +123,7 @@ public class ListingService {
                 .stream()
                 .collect(Collectors.toMap(
                         ListingImage::getListingId,
-                        ListingImage::getImageUrl,
+                        image -> mediaService.presignImageUrl(image.getImageUrl()),
                         (first, ignored) -> first
                 ));
 
@@ -283,7 +311,7 @@ public class ListingService {
                         .stream()
                         .map(image -> new ListingDetailResponse.ImageInfo(
                                 image.getId(),
-                                image.getImageUrl(),
+                                mediaService.presignImageUrl(image.getImageUrl()),
                                 image.getSortOrder()
                         ))
                         .toList();
@@ -447,6 +475,177 @@ public class ListingService {
                 canDelete,
                 canMarkSold,
                 lockReason
+        );
+    }
+
+    @Transactional
+    public ListingDetailResponse create(
+            Long sellerId,
+            CreateListingRequest request
+    ) {
+        // 1. Khóa người bán để tránh hai request
+        // cùng sử dụng một uploadToken.
+        User seller = userRepository
+                .findByIdForUpdate(sellerId)
+                .orElseThrow(() -> new BusinessException(
+                        ErrorCode.UNAUTHORIZED
+                ));
+
+        if (seller.getRole() != User.Role.USER) {
+            throw new BusinessException(ErrorCode.FORBIDDEN);
+        }
+
+        if (seller.getStatus() == User.Status.RESTRICTED) {
+            throw new BusinessException(
+                    ErrorCode.ACCOUNT_RESTRICTED
+            );
+        }
+
+        if (seller.getStatus() != User.Status.ACTIVE
+                || !seller.isEmailVerified()) {
+            throw new BusinessException(
+                    ErrorCode.ACCOUNT_NOT_VERIFIED
+            );
+        }
+
+        // Không cần phoneVerified theo quyết định mới.
+        if (seller.getPhone() == null
+                || seller.getPhone().isBlank()) {
+            throw new BusinessException(
+                    ErrorCode.CONTACT_PHONE_REQUIRED
+            );
+        }
+
+        // 2. Kiểm tra danh mục.
+        Category category = categoryRepository
+                .findByIdForListing(request.categoryId())
+                .orElseThrow(() -> new BusinessException(
+                        ErrorCode.CATEGORY_NOT_FOUND
+                ));
+
+        if (category.getStatus() != CategoryStatus.ACTIVE) {
+            throw new BusinessException(
+                    ErrorCode.CATEGORY_INACTIVE
+            );
+        }
+
+        // 3. Kiểm tra giá là số nguyên VND dương.
+        long price;
+
+        try {
+            price = request.listedPrice().longValueExact();
+
+            if (price <= 0) {
+                throw new ArithmeticException();
+            }
+
+        } catch (ArithmeticException ex) {
+            throw new BusinessException(
+                    ErrorCode.VALIDATION_ERROR
+            );
+        }
+
+        // 4. Chuẩn hóa các chuỗi.
+        String title = request.title().trim();
+        String description = request.description().trim();
+        String province = request.province().trim();
+        String ward = request.ward().trim();
+
+        // 5. Kiểm tra danh sách ảnh và thứ tự.
+        List<CreateListingRequest.ImageInput> images =
+                new ArrayList<>(request.images());
+
+        images.sort(
+                Comparator.comparing(
+                        CreateListingRequest.ImageInput::sortOrder
+                )
+        );
+
+        for (int i = 0; i < images.size(); i++) {
+            if (!Objects.equals(
+                    images.get(i).sortOrder(),
+                    i + 1
+            )) {
+                throw new BusinessException(
+                        ErrorCode.INVALID_IMAGE_SET
+                );
+            }
+        }
+
+        // 6. Xác minh tất cả token trước khi ghi dữ liệu.
+        Set<String> uniqueKeys = new HashSet<>();
+
+        List<MediaService.ListingTicket> tickets =
+                new ArrayList<>();
+
+        for (CreateListingRequest.ImageInput image : images) {
+
+            MediaService.ListingTicket ticket =
+                    mediaService.validateListingTicket(
+                            image.uploadToken(),
+                            sellerId
+                    );
+
+            if (!uniqueKeys.add(ticket.destinationKey())) {
+                throw new BusinessException(
+                        ErrorCode.INVALID_IMAGE_SET
+                );
+            }
+
+            if (imageRepository.existsByImageUrl(
+                    ticket.destinationKey()
+            )) {
+                throw new BusinessException(
+                        ErrorCode.UPLOAD_TOKEN_INVALID
+                );
+            }
+
+            tickets.add(ticket);
+        }
+
+        // 7. Tạo bài đăng.
+        ProductListing listing = ProductListing.create(
+                seller,
+                category,
+                title,
+                description,
+                price,
+                request.itemCondition(),
+                province,
+                ward
+        );
+
+        listingRepository.saveAndFlush(listing);
+
+        // 8. Copy từng ảnh từ staging sang nơi chính thức.
+        List<ListingImage> listingImages =
+                new ArrayList<>();
+
+        for (int i = 0; i < tickets.size(); i++) {
+
+            MediaService.ListingTicket ticket = tickets.get(i);
+
+            mediaService.promoteListingImage(ticket);
+
+            listingImages.add(
+                    ListingImage.create(
+                            listing,
+                            ticket.destinationKey(),
+                            i + 1
+                    )
+            );
+        }
+
+        // 9. Lưu 1–8 ảnh trong cùng transaction với bài.
+        imageRepository.saveAllAndFlush(listingImages);
+
+        // 10. Tải lại các thời điểm do MySQL sinh ra.
+        entityManager.refresh(listing);
+
+        // 11. Dùng lại DTO B03 để trả chi tiết bài vừa tạo.
+        return getDetail(
+                listing.getId().toString(),
+                sellerId
         );
     }
 }

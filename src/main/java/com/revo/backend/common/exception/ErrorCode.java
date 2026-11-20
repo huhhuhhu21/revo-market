@@ -161,6 +161,31 @@ public enum ErrorCode {
     ACCOUNT_RESTRICTED(
             HttpStatus.FORBIDDEN,
         "Tài khoản đang bị hạn chế thực hiện thao tác này."
+    ),
+
+    CATEGORY_NOT_FOUND(
+            HttpStatus.NOT_FOUND,
+        "Danh mục không tồn tại."
+    ),
+
+    INVALID_IMAGE_SET(
+            HttpStatus.UNPROCESSABLE_CONTENT,
+        "Danh sách hình ảnh không hợp lệ."
+    ),
+
+    UPLOAD_TOKEN_INVALID(
+            HttpStatus.UNPROCESSABLE_CONTENT,
+        "Upload token không hợp lệ hoặc đã được sử dụng."
+    ),
+
+    UPLOAD_TOKEN_EXPIRED(
+            HttpStatus.UNPROCESSABLE_CONTENT,
+        "Upload token đã hết hạn."
+    ),
+
+    CONTACT_PHONE_REQUIRED(
+            HttpStatus.UNPROCESSABLE_CONTENT,
+        "Cần cập nhật số điện thoại liên hệ trước khi đăng bán."
     );
 
 

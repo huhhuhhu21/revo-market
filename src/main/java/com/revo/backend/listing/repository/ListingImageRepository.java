@@ -10,6 +10,8 @@ import java.util.List;
 public interface ListingImageRepository
         extends JpaRepository<ListingImage, Long> {
 
+    boolean existsByImageUrl(String imageUrl);
+
     @Query("""
             SELECT image
             FROM ListingImage image
