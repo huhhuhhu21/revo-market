@@ -112,4 +112,15 @@ public class PurchaseRequest {
         this.status = PurchaseRequestStatus.ACCEPTED;
         this.respondedAt = now;
     }
+
+    public void reject(LocalDateTime now) {
+        if (this.status != PurchaseRequestStatus.PENDING) {
+            throw new IllegalStateException(
+                    "Purchase request is not pending"
+            );
+        }
+
+        this.status = PurchaseRequestStatus.REJECTED;
+        this.respondedAt = now;
+    }
 }

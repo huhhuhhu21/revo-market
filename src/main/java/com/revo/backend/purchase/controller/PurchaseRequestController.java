@@ -108,4 +108,27 @@ public class PurchaseRequestController {
         // Retry: trả cùng đơn, HTTP 200.
         return ResponseEntity.ok(result.body());
     }
+
+    @PostMapping("/{requestId}/reject")
+    public ResponseEntity<PurchaseRequestResponse> reject(
+            @PathVariable String requestId,
+            @RequestBody(required = false) Map<String, Object> body,
+            @AuthenticationPrincipal Jwt jwt
+    ) {
+        // C06 không nhận lý do hay dữ liệu bổ sung.
+        if (body != null && !body.isEmpty()) {
+            throw new BusinessException(
+                    ErrorCode.INVALID_REQUEST_BODY
+            );
+        }
+
+        Long sellerId = Long.parseLong(jwt.getSubject());
+
+        PurchaseRequestResponse result = service.reject(
+                sellerId,
+                requestId
+        );
+
+        return ResponseEntity.ok(result);
+    }
 }

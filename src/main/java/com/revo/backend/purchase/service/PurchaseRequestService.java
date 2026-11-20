@@ -56,7 +56,19 @@ import java.util.List;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
+import com.revo.backend.auth.entity.User;
+import com.revo.backend.listing.entity.ListingStatus;
+import com.revo.backend.listing.entity.ProductListing;
+import com.revo.backend.notification.entity.Notification;
+import com.revo.backend.purchase.dto.PurchaseRequestResponse;
+import com.revo.backend.purchase.entity.PurchaseRequest;
+import com.revo.backend.purchase.entity.PurchaseRequestStatus;
 
+import org.springframework.transaction.annotation.Transactional;
+
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 @Service
 public class PurchaseRequestService {
 
@@ -893,6 +905,122 @@ public class PurchaseRequestService {
                                 .atOffset(ZoneOffset.UTC)
                 )
         );
+    }
+
+    @Transactional
+    public PurchaseRequestResponse reject(
+            Long currentUserId,
+            String rawRequestId
+    ) {
+        // 1. Kiểm tra requestId.
+        Long requestId = parseRequestId(rawRequestId);
+
+        // 2. Đọc listingId trước để thống nhất thứ tự khóa
+        // với C05.
+        Long listingId = purchaseRequestRepository
+                .findListingIdByRequestId(requestId)
+                .orElseThrow(() -> new BusinessException(
+                        ErrorCode.PURCHASE_REQUEST_NOT_FOUND
+                ));
+
+        // 3. Khóa bài đăng trước.
+        ProductListing listing = listingRepository
+                .findByIdForUpdate(listingId)
+                .orElseThrow(() -> new BusinessException(
+                        ErrorCode.PURCHASE_REQUEST_NOT_FOUND
+                ));
+
+        // 4. Sau đó khóa yêu cầu mua.
+        PurchaseRequest request = purchaseRequestRepository
+                .findByIdForUpdate(requestId)
+                .orElseThrow(() -> new BusinessException(
+                        ErrorCode.PURCHASE_REQUEST_NOT_FOUND
+                ));
+
+        User seller = listing.getSeller();
+
+        // 5. Chỉ đúng chủ bài được từ chối yêu cầu.
+        if (!seller.getId().equals(currentUserId)
+                || seller.getRole() != User.Role.USER) {
+
+            throw new BusinessException(
+                    ErrorCode.NOT_LISTING_OWNER
+            );
+        }
+
+        // 6. Kiểm tra trạng thái tài khoản người bán.
+        if (seller.getStatus() != User.Status.ACTIVE) {
+            throw new BusinessException(
+                    ErrorCode.ACCOUNT_RESTRICTED
+            );
+        }
+
+        if (!isEligible(seller)) {
+            throw new BusinessException(
+                    ErrorCode.PARTICIPANT_NOT_ELIGIBLE
+            );
+        }
+
+        // 7. Nếu đã REJECTED, trả kết quả cũ.
+        // Không cập nhật respondedAt hay gửi thông báo lại.
+        if (request.getStatus()
+                == PurchaseRequestStatus.REJECTED) {
+
+            return getDetail(currentUserId, rawRequestId);
+        }
+
+        // 8. Các trạng thái khác PENDING không được từ chối.
+        if (request.getStatus()
+                != PurchaseRequestStatus.PENDING) {
+
+            throw new BusinessException(
+                    ErrorCode.PURCHASE_REQUEST_NOT_PENDING
+            );
+        }
+
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC)
+                .truncatedTo(ChronoUnit.MILLIS);
+
+        // 9. Kiểm tra thời hạn 48 giờ.
+        // Đúng thời điểm expiresAt vẫn hợp lệ.
+        if (now.isAfter(request.getExpiresAt())) {
+
+            throw new BusinessException(
+                    ErrorCode.PURCHASE_REQUEST_EXPIRED
+            );
+        }
+
+        // 10. Kiểm tra tình trạng bài đăng.
+        if (listing.getStatus() != ListingStatus.AVAILABLE
+                || listing.isDeleted()
+                || listing.isAdminHidden()
+                || listing.getHiddenReasonType() != null) {
+
+            throw new BusinessException(
+                    ErrorCode.LISTING_NOT_AVAILABLE
+            );
+        }
+
+        if (listingRepository.countActiveOrders(listingId) > 0) {
+            throw new BusinessException(
+                    ErrorCode.LISTING_NOT_AVAILABLE
+            );
+        }
+
+        // 11. Chuyển PENDING -> REJECTED.
+        request.reject(now);
+
+        // 12. Tạo thông báo cho người mua.
+        notificationRepository.save(
+                Notification.purchaseRequestUpdated(
+                        request.getBuyer(),
+                        requestId,
+                        "Yêu cầu mua của bạn đã bị người bán từ chối."
+                )
+        );
+
+        // 13. Tái sử dụng C04 để trả DTO đầy đủ.
+        return getDetail(currentUserId, rawRequestId);
     }
 
 
