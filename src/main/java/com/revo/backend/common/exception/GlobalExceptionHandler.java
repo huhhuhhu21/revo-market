@@ -8,7 +8,8 @@ import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
-
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.multipart.support.MissingServletRequestPartException;
 import java.util.List;
 import java.util.UUID;
 
@@ -62,6 +63,28 @@ public class GlobalExceptionHandler {
         return buildValidationResponse(List.of(), request);
     }
 
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    public ResponseEntity<ApiErrorResponse> handleImageTooLarge(
+            MaxUploadSizeExceededException ex,
+            HttpServletRequest request
+    ) {
+        return buildMediaError(
+                ErrorCode.IMAGE_TOO_LARGE,
+                request
+        );
+    }
+
+    @ExceptionHandler(MissingServletRequestPartException.class)
+    public ResponseEntity<ApiErrorResponse> handleMissingFile(
+            MissingServletRequestPartException ex,
+            HttpServletRequest request
+    ) {
+        return buildMediaError(
+                ErrorCode.INVALID_IMAGE,
+                request
+        );
+    }
+
     private ResponseEntity<ApiErrorResponse> buildValidationResponse(
             List<ApiErrorResponse.FieldErrorDetail> details,
             HttpServletRequest request
@@ -90,5 +113,21 @@ public class GlobalExceptionHandler {
         String id = "req-" + UUID.randomUUID();
         request.setAttribute("requestId", id);
         return id;
+    }
+
+    private ResponseEntity<ApiErrorResponse> buildMediaError(
+            ErrorCode errorCode,
+            HttpServletRequest request
+    ) {
+        ApiErrorResponse response = ApiErrorResponse.of(
+                errorCode.name(),
+                errorCode.getDefaultMessage(),
+                List.of(),
+                getRequestId(request)
+        );
+
+        return ResponseEntity
+                .status(errorCode.getHttpStatus())
+                .body(response);
     }
 }

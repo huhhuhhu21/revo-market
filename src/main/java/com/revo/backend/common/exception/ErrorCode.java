@@ -136,8 +136,32 @@ public enum ErrorCode {
     LISTING_NOT_FOUND(
             HttpStatus.NOT_FOUND,
         "Không tìm thấy bài đăng."
-    );
+    ),
 
+    INVALID_IMAGE(
+            HttpStatus.BAD_REQUEST,
+        "Hình ảnh không hợp lệ."
+    ),
+
+    IMAGE_TOO_LARGE(
+            HttpStatus.PAYLOAD_TOO_LARGE,
+        "Hình ảnh vượt quá dung lượng cho phép."
+    ),
+
+    UNSUPPORTED_IMAGE_TYPE(
+            HttpStatus.UNSUPPORTED_MEDIA_TYPE,
+        "Định dạng hình ảnh không được hỗ trợ."
+    ),
+
+    MEDIA_STORAGE_UNAVAILABLE(
+            HttpStatus.SERVICE_UNAVAILABLE,
+        "Không thể lưu hình ảnh. Vui lòng thử lại."
+    ),
+
+    ACCOUNT_RESTRICTED(
+            HttpStatus.FORBIDDEN,
+        "Tài khoản đang bị hạn chế thực hiện thao tác này."
+    );
 
 
 
