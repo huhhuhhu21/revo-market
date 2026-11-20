@@ -11,6 +11,10 @@ import org.springframework.web.bind.annotation.*;
 
 import java.net.URI;
 import com.revo.backend.purchase.dto.SentPurchaseRequestPage;
+import com.revo.backend.purchase.dto.SentPurchaseRequestItem;
+import com.revo.backend.purchase.dto.ReceivedPurchaseRequestItem;
+import java.util.List;
+
 @RestController
 @RequestMapping("/api/v1/purchase-requests")
 public class PurchaseRequestController {
@@ -34,19 +38,22 @@ public class PurchaseRequestController {
     }
 
     @GetMapping("/sent")
-    public SentPurchaseRequestPage getSentRequests(
-            @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "20") int size,
+    public List<SentPurchaseRequestItem> getSentRequests(
             @RequestParam(defaultValue = "ALL") String status,
             @AuthenticationPrincipal Jwt jwt
     ) {
         Long buyerId = Long.parseLong(jwt.getSubject());
 
-        return service.getSentRequests(
-                buyerId,
-                page,
-                size,
-                status
-        );
+        return service.getSentRequests(buyerId, status);
+    }
+
+    @GetMapping("/received")
+    public List<ReceivedPurchaseRequestItem> getReceivedRequests(
+            @RequestParam(defaultValue = "ALL") String status,
+            @AuthenticationPrincipal Jwt jwt
+    ) {
+        Long sellerId = Long.parseLong(jwt.getSubject());
+
+        return service.getReceivedRequests(sellerId, status);
     }
 }

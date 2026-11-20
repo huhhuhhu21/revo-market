@@ -14,7 +14,8 @@ import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 
 import java.util.List;
-
+import org.springframework.data.jpa.repository.EntityGraph;
+import java.util.List;
 public interface PurchaseRequestRepository
         extends JpaRepository<PurchaseRequest, Long>,
         JpaSpecificationExecutor<PurchaseRequest> {
@@ -77,5 +78,22 @@ public interface PurchaseRequestRepository
             @Param("requestIds") List<Long> requestIds
     );
 
+    @EntityGraph(attributePaths = {
+            "listing",
+            "listing.seller",
+            "buyer"
+    })
+    List<PurchaseRequest> findByBuyer_IdOrderByCreatedAtDescIdDesc(
+            Long buyerId
+    );
+
+    @EntityGraph(attributePaths = {
+            "listing",
+            "listing.seller",
+            "buyer"
+    })
+    List<PurchaseRequest> findByListing_Seller_IdOrderByCreatedAtDescIdDesc(
+            Long sellerId
+    );
 
 }

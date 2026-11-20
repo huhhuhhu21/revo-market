@@ -5,7 +5,8 @@ import com.revo.backend.purchase.entity.PurchaseRequestStatus;
 
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
-
+import org.springframework.data.jpa.repository.EntityGraph;
+import java.util.List;
 public record PurchaseRequestResponse(
         Long id,
         ListingRef listing,
@@ -62,4 +63,5 @@ public record PurchaseRequestResponse(
                 true    // Có thể rút khi đang PENDING và chưa hết hạn.
         );
     }
+
 }

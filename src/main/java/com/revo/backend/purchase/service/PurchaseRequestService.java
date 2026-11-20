@@ -38,6 +38,17 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import com.revo.backend.purchase.dto.SentPurchaseRequestItem;
+import com.revo.backend.purchase.dto.ReceivedPurchaseRequestItem;
+import com.revo.backend.purchase.entity.PurchaseRequestStatus;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+
+
 @Service
 public class PurchaseRequestService {
 
@@ -182,234 +193,241 @@ public class PurchaseRequestService {
     }
 
     @Transactional(readOnly = true)
-    public SentPurchaseRequestPage getSentRequests(
+    public List<SentPurchaseRequestItem> getSentRequests(
             Long buyerId,
-            int page,
-            int size,
             String status
     ) {
-        // 1. Kiểm tra phân trang.
-        if (page < 0 || size < 1 || size > 20) {
+        PurchaseRequestStatus filter = parseStatusFilter(status);
+
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+
+        List<PurchaseRequest> requests =
+                purchaseRequestRepository
+                        .findByBuyer_IdOrderByCreatedAtDescIdDesc(buyerId);
+
+        Map<Long, OrderLink> orderLinks = loadOrderLinks(requests);
+
+        List<SentPurchaseRequestItem> result = new ArrayList<>();
+
+        for (PurchaseRequest request : requests) {
+
+            PurchaseRequestStatus effective =
+                    effectiveStatus(request, now);
+
+            if (filter != null && filter != effective) {
+                continue;
+            }
+
+            OrderLink orderLink = orderLinks.get(request.getId());
+
+            result.add(new SentPurchaseRequestItem(
+                    request.getId(),
+                    listingRefForBuyer(request, orderLink),
+                    request.getOfferedPrice(),
+                    effective,
+                    request.getCreatedAt().atOffset(ZoneOffset.UTC),
+                    request.getExpiresAt().atOffset(ZoneOffset.UTC),
+                    orderLink == null ? null : orderLink.orderId(),
+                    effective == PurchaseRequestStatus.PENDING
+            ));
+        }
+
+        return result;
+    }
+
+    @Transactional(readOnly = true)
+    public List<ReceivedPurchaseRequestItem> getReceivedRequests(
+            Long sellerId,
+            String status
+    ) {
+        PurchaseRequestStatus filter = parseStatusFilter(status);
+
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+
+        List<PurchaseRequest> requests =
+                purchaseRequestRepository
+                        .findByListing_Seller_IdOrderByCreatedAtDescIdDesc(
+                                sellerId
+                        );
+
+        Map<Long, OrderLink> orderLinks = loadOrderLinks(requests);
+
+        List<ReceivedPurchaseRequestItem> result = new ArrayList<>();
+
+        for (PurchaseRequest request : requests) {
+
+            PurchaseRequestStatus effective =
+                    effectiveStatus(request, now);
+
+            if (filter != null && effective != filter) {
+                continue;
+            }
+
+            ProductListing listing = request.getListing();
+            User seller = listing.getSeller();
+            User buyer = request.getBuyer();
+
+            boolean listingAvailable =
+                    listing.getStatus() == ListingStatus.AVAILABLE
+                            && !listing.isDeleted()
+                            && !listing.isAdminHidden()
+                            && listing.getHiddenReasonType() == null;
+
+            boolean sellerEligible = isEligible(seller);
+            boolean buyerEligible = isEligible(buyer);
+
+            boolean pending =
+                    effective == PurchaseRequestStatus.PENDING;
+
+            boolean canReject =
+                    pending
+                            && sellerEligible
+                            && listingAvailable;
+
+            boolean canAccept =
+                    canReject
+                            && buyerEligible;
+
+            OrderLink orderLink = orderLinks.get(request.getId());
+
+            boolean detailAccessible = !listing.isDeleted();
+
+            result.add(new ReceivedPurchaseRequestItem(
+                    request.getId(),
+                    new PurchaseRequestResponse.ListingRef(
+                            listing.getId(),
+                            detailAccessible ? listing.getTitle() : null,
+                            detailAccessible
+                    ),
+                    new PurchaseRequestResponse.Party(
+                            buyer.getId(),
+                            buyer.getFullName()
+                    ),
+                    request.getOfferedPrice(),
+                    effective,
+                    request.getCreatedAt().atOffset(ZoneOffset.UTC),
+                    request.getExpiresAt().atOffset(ZoneOffset.UTC),
+                    orderLink == null ? null : orderLink.orderId(),
+                    canAccept,
+                    canReject
+            ));
+        }
+
+        return result;
+    }
+
+
+    private static PurchaseRequestStatus parseStatusFilter(String raw) {
+
+        String normalized = raw == null
+                ? "ALL"
+                : raw.trim().toUpperCase(Locale.ROOT);
+
+        if ("ALL".equals(normalized)) {
+            return null;
+        }
+
+        try {
+            return PurchaseRequestStatus.valueOf(normalized);
+        } catch (IllegalArgumentException ex) {
             throw new BusinessException(
-                    ErrorCode.INVALID_PAGINATION
+                    ErrorCode.INVALID_STATUS_FILTER
             );
         }
+    }
 
-        // 2. Chuẩn hóa bộ lọc trạng thái.
-        String filter = status == null
-                ? "ALL"
-                : status.trim().toUpperCase(Locale.ROOT);
+    private static PurchaseRequestStatus effectiveStatus(
+            PurchaseRequest request,
+            LocalDateTime now
+    ) {
+        if (request.getStatus() == PurchaseRequestStatus.PENDING
+                && now.isAfter(request.getExpiresAt())) {
 
-        PurchaseRequestStatus filterStatus = null;
-
-        if (!filter.equals("ALL")) {
-            try {
-                filterStatus = PurchaseRequestStatus.valueOf(
-                        filter
-                );
-            } catch (IllegalArgumentException ex) {
-                throw new BusinessException(
-                        ErrorCode.INVALID_STATUS_FILTER
-                );
-            }
+            return PurchaseRequestStatus.EXPIRED;
         }
 
-        // 3. Lấy thời gian server UTC.
-        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC)
-                .truncatedTo(ChronoUnit.MILLIS);
+        return request.getStatus();
+    }
 
-        PurchaseRequestStatus selectedStatus = filterStatus;
+    private Map<Long, OrderLink> loadOrderLinks(
+            List<PurchaseRequest> requests
+    ) {
+        Map<Long, OrderLink> links = new HashMap<>();
 
-        // 4. Chỉ lấy yêu cầu của chính buyerId.
-        Specification<PurchaseRequest> spec =
-                (root, query, cb) -> {
+        if (requests.isEmpty()) {
+            return links;
+        }
 
-                    Predicate owner = cb.equal(
-                            root.get("buyer").get("id"),
-                            buyerId
-                    );
-
-                    if (selectedStatus == null) {
-                        return owner;
-                    }
-
-                    Predicate statusPredicate;
-
-                    if (selectedStatus == PurchaseRequestStatus.PENDING) {
-
-                        statusPredicate = cb.and(
-                                cb.equal(
-                                        root.get("status"),
-                                        PurchaseRequestStatus.PENDING
-                                ),
-                                cb.greaterThanOrEqualTo(
-                                        root.<LocalDateTime>get("expiresAt"),
-                                        now
-                                )
-                        );
-
-                    } else if (
-                            selectedStatus == PurchaseRequestStatus.EXPIRED
-                    ) {
-
-                        statusPredicate = cb.or(
-                                cb.equal(
-                                        root.get("status"),
-                                        PurchaseRequestStatus.EXPIRED
-                                ),
-                                cb.and(
-                                        cb.equal(
-                                                root.get("status"),
-                                                PurchaseRequestStatus.PENDING
-                                        ),
-                                        cb.lessThan(
-                                                root.<LocalDateTime>get("expiresAt"),
-                                                now
-                                        )
-                                )
-                        );
-
-                    } else {
-
-                        statusPredicate = cb.equal(
-                                root.get("status"),
-                                selectedStatus
-                        );
-                    }
-
-                    return cb.and(owner, statusPredicate);
-                };
-
-        // 5. Phân trang, mới nhất trước, có ID để tránh
-        // thứ tự không ổn định khi createdAt trùng nhau.
-        PageRequest pageable = PageRequest.of(
-                page,
-                size,
-                Sort.by(
-                        Sort.Order.desc("createdAt"),
-                        Sort.Order.desc("id")
-                )
-        );
-
-        Page<PurchaseRequest> result =
-                purchaseRequestRepository.findAll(
-                        spec,
-                        pageable
-                );
-
-        // 6. Lấy orderId của các request trong trang.
-        Map<Long, OrderLink> orderLinks = new HashMap<>();
-
-        List<Long> requestIds = result.getContent()
-                .stream()
+        List<Long> requestIds = requests.stream()
                 .map(PurchaseRequest::getId)
                 .toList();
 
-        if (!requestIds.isEmpty()) {
+        // Chia nhóm để tránh truyền danh sách ID quá lớn vào IN (...).
+        final int batchSize = 500;
+
+        for (int start = 0; start < requestIds.size(); start += batchSize) {
+
+            int end = Math.min(start + batchSize, requestIds.size());
+
+            List<Long> batch = requestIds.subList(start, end);
 
             for (Object[] row :
-                    purchaseRequestRepository.findOrderLinks(requestIds)) {
+                    purchaseRequestRepository.findOrderLinks(batch)) {
 
                 Long requestId = ((Number) row[0]).longValue();
                 Long orderId = ((Number) row[1]).longValue();
                 String orderStatus = row[2].toString();
 
-                orderLinks.put(
+                links.put(
                         requestId,
                         new OrderLink(orderId, orderStatus)
                 );
             }
         }
 
-        // 7. Chuyển Entity thành DTO danh sách.
-        List<SentPurchaseRequestItem> items = new ArrayList<>();
+        return links;
+    }
 
-        for (PurchaseRequest request : result.getContent()) {
+    private PurchaseRequestResponse.ListingRef listingRefForBuyer(
+            PurchaseRequest request,
+            OrderLink orderLink
+    ) {
+        ProductListing listing = request.getListing();
 
-            ProductListing listing = request.getListing();
-            OrderLink orderLink = orderLinks.get(request.getId());
+        User seller = listing.getSeller();
 
-            // Chỉ công khai tiêu đề bài hiện tại nếu
-            // người mua có quyền đọc chi tiết bài.
-            boolean sellerActive =
-                    listing.getSeller().getStatus() == User.Status.ACTIVE;
+        boolean publiclyAccessible =
+                seller.getStatus() == User.Status.ACTIVE
+                        && seller.isEmailVerified()
+                        && seller.getPhone() != null
+                        && !seller.getPhone().isBlank()
+                        && (
+                        listing.getStatus() == ListingStatus.AVAILABLE
+                                || listing.getStatus() == ListingStatus.SOLD
+                );
 
-            boolean publiclyAccessible =
-                    sellerActive
-                            && (
-                            listing.getStatus() == ListingStatus.AVAILABLE
-                                    || listing.getStatus() == ListingStatus.SOLD
-                    );
+        boolean activeOrder =
+                orderLink != null
+                        && (
+                        "PENDING_PICKUP".equals(orderLink.status())
+                                || "IN_TRANSIT".equals(orderLink.status())
+                                || "DELIVERED".equals(orderLink.status())
+                );
 
-            // Người mua của đơn đang xử lý có thể
-            // xem bài IN_TRANSACTION liên quan.
-            boolean activeOrderOfBuyer =
-                    orderLink != null
-                            && (
-                            "PENDING_PICKUP".equals(orderLink.status())
-                                    || "IN_TRANSIT".equals(orderLink.status())
-                                    || "DELIVERED".equals(orderLink.status())
-                    );
+        boolean transactionAccessible =
+                listing.getStatus() == ListingStatus.IN_TRANSACTION
+                        && activeOrder;
 
-            boolean orderAccessible =
-                    listing.getStatus() == ListingStatus.IN_TRANSACTION
-                            && activeOrderOfBuyer;
+        boolean detailAccessible =
+                !listing.isDeleted()
+                        && !listing.isAdminHidden()
+                        && listing.getHiddenReasonType() == null
+                        && (publiclyAccessible || transactionAccessible);
 
-            boolean detailAccessible =
-                    !listing.isDeleted()
-                            && !listing.isAdminHidden()
-                            && (
-                            publiclyAccessible
-                                    || orderAccessible
-                    )
-                            && (
-                            listing.getHiddenReasonType() == null
-                    );
-
-            String currentTitle = detailAccessible
-                    ? listing.getTitle()
-                    : null;
-
-            PurchaseRequestStatus effectiveStatus =
-                    request.getStatus();
-
-            // Hiển thị hết hạn nếu đã quá 48 giờ,
-            // kể cả khi scheduled job chưa cập nhật DB.
-            if (effectiveStatus == PurchaseRequestStatus.PENDING
-                    && now.isAfter(request.getExpiresAt())) {
-
-                effectiveStatus = PurchaseRequestStatus.EXPIRED;
-            }
-
-            boolean canWithdraw =
-                    effectiveStatus == PurchaseRequestStatus.PENDING;
-
-            items.add(
-                    new SentPurchaseRequestItem(
-                            request.getId(),
-                            new PurchaseRequestResponse.ListingRef(
-                                    listing.getId(),
-                                    currentTitle,
-                                    detailAccessible
-                            ),
-                            request.getOfferedPrice(),
-                            effectiveStatus,
-                            request.getCreatedAt().atOffset(ZoneOffset.UTC),
-                            request.getExpiresAt().atOffset(ZoneOffset.UTC),
-                            orderLink == null
-                                    ? null
-                                    : orderLink.orderId(),
-                            canWithdraw
-                    )
-            );
-        }
-
-        return new SentPurchaseRequestPage(
-                items,
-                result.getNumber(),
-                result.getSize(),
-                result.getTotalElements(),
-                result.hasNext()
+        return new PurchaseRequestResponse.ListingRef(
+                listing.getId(),
+                detailAccessible ? listing.getTitle() : null,
+                detailAccessible
         );
     }
 }
