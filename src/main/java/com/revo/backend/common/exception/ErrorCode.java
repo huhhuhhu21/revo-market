@@ -336,6 +336,17 @@ public enum ErrorCode {
 
 
 
+    NOT_REQUEST_BUYER(
+            HttpStatus.FORBIDDEN,
+            "Bạn không phải người gửi yêu cầu mua này."
+    ),
+
+    PURCHASE_REQUEST_ALREADY_ACCEPTED(
+            HttpStatus.CONFLICT,
+            "Yêu cầu mua đã được chấp nhận. Vui lòng sử dụng chức năng hủy đơn hàng."
+    ),
+
+
     INVALID_STATUS_FILTER(
             HttpStatus.BAD_REQUEST,
             "Trạng thái lọc không hợp lệ."

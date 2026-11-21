@@ -1023,5 +1023,98 @@ public class PurchaseRequestService {
         return getDetail(currentUserId, rawRequestId);
     }
 
+    @Transactional
+    public PurchaseRequestResponse withdraw(
+            Long currentUserId,
+            String rawRequestId
+    ) {
+        // 1. Kiểm tra requestId.
+        Long requestId = parseRequestId(rawRequestId);
+
+        // 2. Lấy listingId để thống nhất thứ tự khóa.
+        Long listingId = purchaseRequestRepository
+                .findListingIdByRequestId(requestId)
+                .orElseThrow(() -> new BusinessException(
+                        ErrorCode.PURCHASE_REQUEST_NOT_FOUND
+                ));
+
+        // 3. Khóa bài đăng trước, giống C05/C06.
+        ProductListing listing = listingRepository
+                .findByIdForUpdate(listingId)
+                .orElseThrow(() -> new BusinessException(
+                        ErrorCode.PURCHASE_REQUEST_NOT_FOUND
+                ));
+
+        // 4. Khóa yêu cầu mua.
+        PurchaseRequest request = purchaseRequestRepository
+                .findByIdForUpdate(requestId)
+                .orElseThrow(() -> new BusinessException(
+                        ErrorCode.PURCHASE_REQUEST_NOT_FOUND
+                ));
+
+        // 5. Chỉ người mua sở hữu request được rút.
+        User buyer = request.getBuyer();
+
+        if (!buyer.getId().equals(currentUserId)
+                || buyer.getRole() != User.Role.USER) {
+            throw new BusinessException(
+                    ErrorCode.NOT_REQUEST_BUYER
+            );
+        }
+
+        // 6. Retry an toàn: ENDED thì giữ nguyên.
+        if (request.getStatus() == PurchaseRequestStatus.ENDED) {
+            return getDetail(currentUserId, rawRequestId);
+        }
+
+        // 7. ACCEPTED phải xử lý bằng hủy đơn C10.
+        if (request.getStatus()
+                == PurchaseRequestStatus.ACCEPTED) {
+            throw new BusinessException(
+                    ErrorCode.PURCHASE_REQUEST_ALREADY_ACCEPTED
+            );
+        }
+
+        // 8. EXPIRED đã được lưu trước đó.
+        // Controller sẽ trả lỗi 409.
+        if (request.getStatus()
+                == PurchaseRequestStatus.EXPIRED) {
+            return getDetail(currentUserId, rawRequestId);
+        }
+
+        // 9. Các trạng thái khác không được rút.
+        if (request.getStatus()
+                != PurchaseRequestStatus.PENDING) {
+            throw new BusinessException(
+                    ErrorCode.PURCHASE_REQUEST_NOT_PENDING
+            );
+        }
+
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC)
+                .truncatedTo(ChronoUnit.MILLIS);
+
+        // 10. Quá 48 giờ thì chuyển EXPIRED.
+        if (now.isAfter(request.getExpiresAt())) {
+            request.expire();
+
+            return getDetail(currentUserId, rawRequestId);
+        }
+
+        // 11. PENDING còn hạn -> ENDED.
+        request.withdraw();
+
+        // 12. Thông báo cho người bán.
+        notificationRepository.save(
+                Notification.purchaseRequestUpdated(
+                        listing.getSeller(),
+                        requestId,
+                        "Người mua đã rút yêu cầu mua."
+                )
+        );
+
+        // 13. Trả DTO chi tiết mới nhất.
+        return getDetail(currentUserId, rawRequestId);
+    }
+
 
 }

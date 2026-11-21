@@ -2,6 +2,7 @@ package com.revo.backend.purchase.controller;
 
 import com.revo.backend.purchase.dto.CreatePurchaseRequestRequest;
 import com.revo.backend.purchase.dto.PurchaseRequestResponse;
+import com.revo.backend.purchase.entity.PurchaseRequestStatus;
 import com.revo.backend.purchase.service.PurchaseRequestService;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
@@ -131,4 +132,36 @@ public class PurchaseRequestController {
 
         return ResponseEntity.ok(result);
     }
+
+
+    @PostMapping("/{requestId}/withdraw")
+    public ResponseEntity<PurchaseRequestResponse> withdraw(
+            @PathVariable String requestId,
+            @RequestBody(required = false) Map<String, Object> body,
+            @AuthenticationPrincipal Jwt jwt
+    ) {
+        // C07 không chấp nhận dữ liệu bổ sung.
+        if (body != null && !body.isEmpty()) {
+            throw new BusinessException(
+                    ErrorCode.INVALID_REQUEST_BODY
+            );
+        }
+
+        Long buyerId = Long.parseLong(jwt.getSubject());
+
+        PurchaseRequestResponse result = service.withdraw(
+                buyerId,
+                requestId
+        );
+
+        // Service đã commit trạng thái EXPIRED.
+        if (result.status() == PurchaseRequestStatus.EXPIRED) {
+            throw new BusinessException(
+                    ErrorCode.PURCHASE_REQUEST_EXPIRED
+            );
+        }
+
+        return ResponseEntity.ok(result);
+    }
+
 }
