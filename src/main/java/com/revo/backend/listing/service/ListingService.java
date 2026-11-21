@@ -454,11 +454,14 @@ public class ListingService {
         boolean canHide =
                 unlocked && available;
 
+
         boolean canRestore =
                 unlocked
                         && restorableReason
+                        && listing.getSeller().isEmailVerified()
                         && hasContactPhone
                         && categoryActive;
+
 
         boolean canDelete =
                 canEdit;
@@ -1561,6 +1564,160 @@ public class ListingService {
         entityManager.refresh(listing);
 
         // 9. Trả DTO chi tiết với quyền của chủ bài.
+        return getDetail(rawListingId, sellerId);
+    }
+
+    @Transactional
+    public ListingDetailResponse restore(
+            Long sellerId,
+            String rawListingId
+    ) {
+        // 1. Kiểm tra ID bài đăng.
+        Long listingId = parseListingId(rawListingId);
+
+        // 2. Khóa tài khoản.
+        User seller = userRepository
+                .findByIdForUpdate(sellerId)
+                .orElseThrow(() -> new BusinessException(
+                        ErrorCode.UNAUTHORIZED
+                ));
+
+        if (seller.getRole() != User.Role.USER) {
+            throw new BusinessException(
+                    ErrorCode.FORBIDDEN
+            );
+        }
+
+        if (seller.getStatus() != User.Status.ACTIVE) {
+            throw new BusinessException(
+                    ErrorCode.ACCOUNT_RESTRICTED
+            );
+        }
+
+        // 3. Khóa bài đăng để tránh cập nhật đồng thời.
+        ProductListing listing = listingRepository
+                .findByIdForUpdate(listingId)
+                .orElseThrow(() -> new BusinessException(
+                        ErrorCode.LISTING_NOT_FOUND
+                ));
+
+        // 4. Kiểm tra quyền sở hữu.
+        if (!listing.getSeller().getId().equals(sellerId)) {
+            throw new BusinessException(
+                    ErrorCode.NOT_LISTING_OWNER
+            );
+        }
+
+        if (listing.isDeleted()) {
+            throw new BusinessException(
+                    ErrorCode.LISTING_NOT_FOUND
+            );
+        }
+
+        if (listing.isAdminHidden()) {
+            throw new BusinessException(
+                    ErrorCode.LISTING_ADMIN_HIDDEN
+            );
+        }
+
+        // 5. Nếu đã AVAILABLE, trả lại hiện trạng.
+        // Không cập nhật updatedAt khi gọi lại.
+        if (listing.getStatus() == ListingStatus.AVAILABLE
+                && listing.getHiddenReasonType() == null) {
+            return getDetail(rawListingId, sellerId);
+        }
+
+        // 6. Chỉ HIDDEN với lý do hợp lệ mới được khôi phục.
+        boolean sellerHidden =
+                "SELLER".equals(listing.getHiddenReasonType());
+
+        boolean returnedHidden =
+                "RETURNED".equals(listing.getHiddenReasonType());
+
+        if (listing.getStatus() != ListingStatus.HIDDEN
+                || (!sellerHidden && !returnedHidden)) {
+            throw new BusinessException(
+                    ErrorCode.LISTING_NOT_RESTORABLE
+            );
+        }
+
+        // 7. Kiểm tra điều kiện tài khoản như B07.
+        if (!seller.isEmailVerified()) {
+            throw new BusinessException(
+                    ErrorCode.ACCOUNT_NOT_VERIFIED
+            );
+        }
+
+        // Không yêu cầu phoneVerified.
+        if (seller.getPhone() == null
+                || seller.getPhone().isBlank()) {
+            throw new BusinessException(
+                    ErrorCode.CONTACT_PHONE_REQUIRED
+            );
+        }
+
+        // 8. Danh mục phải đang hoạt động.
+        Category category = categoryRepository
+                .findByIdForListing(
+                        listing.getCategory().getId()
+                )
+                .orElseThrow(() -> new BusinessException(
+                        ErrorCode.CATEGORY_NOT_FOUND
+                ));
+
+        if (category.getStatus() != CategoryStatus.ACTIVE) {
+            throw new BusinessException(
+                    ErrorCode.CATEGORY_INACTIVE
+            );
+        }
+
+        // 9. Không còn yêu cầu mua hoặc đơn đang xử lý.
+        boolean hasPendingRequests =
+                listingRepository.countPendingRequests(
+                        listingId
+                ) > 0;
+
+        boolean hasActiveOrders =
+                listingRepository.countActiveOrders(
+                        listingId
+                ) > 0;
+
+        if (hasPendingRequests || hasActiveOrders) {
+            throw new BusinessException(
+                    ErrorCode.LISTING_LOCKED
+            );
+        }
+
+        // 10. Không còn quy trình trả hàng dang dở.
+        if (listingRepository.countUnfinishedReturns(
+                listingId
+        ) > 0) {
+            throw new BusinessException(
+                    ErrorCode.LISTING_NOT_RESTORABLE
+            );
+        }
+
+        // 11. Nếu ẩn do RETURNED, phải có kết quả trả
+        // hàng và hoàn COD thành công.
+        if (returnedHidden
+                && listingRepository
+                .countSuccessfullyReturnedOrders(
+                        listingId
+                ) == 0) {
+            throw new BusinessException(
+                    ErrorCode.LISTING_NOT_RESTORABLE
+            );
+        }
+
+        // 12. Khôi phục bài đăng.
+        listing.restoreForSale();
+
+        listingRepository.saveAndFlush(listing);
+
+        // Đồng bộ updatedAt do MySQL quản lý.
+        entityManager.refresh(listing);
+
+        // 13. Trả DTO chi tiết của chủ bài.
         return getDetail(rawListingId, sellerId);
     }
 

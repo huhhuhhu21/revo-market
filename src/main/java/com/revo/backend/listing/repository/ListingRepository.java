@@ -106,4 +106,35 @@ public interface ListingRepository
             @Param("listingIds") Collection<Long> listingIds
     );
 
+
+    @Query(value = """
+    SELECT COUNT(*)
+    FROM orders o
+    JOIN return_requests r ON r.order_id = o.id
+    WHERE o.listing_id = :listingId
+      AND o.status = 'RETURNED'
+      AND o.cod_status = 'REFUNDED'
+      AND o.cod_refunded_at IS NOT NULL
+      AND r.status = 'RETURNED'
+      AND r.returned_at IS NOT NULL
+    """, nativeQuery = true)
+    long countSuccessfullyReturnedOrders(
+            @Param("listingId") Long listingId
+    );
+
+    @Query(value = """
+    SELECT COUNT(*)
+    FROM orders o
+    JOIN return_requests r ON r.order_id = o.id
+    WHERE o.listing_id = :listingId
+      AND r.status IN (
+          'PENDING',
+          'AWAITING_HANDOVER',
+          'RETURNING'
+      )
+    """, nativeQuery = true)
+    long countUnfinishedReturns(
+            @Param("listingId") Long listingId
+    );
+
 }

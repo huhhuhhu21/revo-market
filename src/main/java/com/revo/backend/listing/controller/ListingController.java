@@ -131,4 +131,19 @@ public class ListingController {
         );
     }
 
+    @PostMapping("/{listingId}/restore")
+    public ListingDetailResponse restore(
+            @PathVariable String listingId,
+            @AuthenticationPrincipal Jwt jwt
+    ) {
+        Long sellerId = Long.parseLong(
+                jwt.getSubject()
+        );
+
+        return listingService.restore(
+                sellerId,
+                listingId
+        );
+    }
+
 }

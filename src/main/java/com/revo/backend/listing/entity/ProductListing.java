@@ -193,4 +193,11 @@ public class ProductListing {
 
         this.status = ListingStatus.IN_TRANSACTION;
     }
+
+
+    public void restoreForSale() {
+        this.status = ListingStatus.AVAILABLE;
+        this.hiddenReasonType = null;
+    }
+
 }

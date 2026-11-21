@@ -329,6 +329,11 @@ public enum ErrorCode {
             "Không tìm thấy người dùng."
     ),
 
+    LISTING_NOT_RESTORABLE(
+            HttpStatus.CONFLICT,
+            "Bài đăng chưa đủ điều kiện khôi phục."
+    ),
+
 
 
     INVALID_STATUS_FILTER(
