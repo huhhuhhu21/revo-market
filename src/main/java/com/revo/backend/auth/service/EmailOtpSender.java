@@ -24,16 +24,38 @@ public class EmailOtpSender {
         this.from = from;
     }
 
+
     public void send(String email, String otp) {
+        sendMail(
+                email,
+                "Revo - Xac minh tai khoan",
+                "Ma xac minh Revo cua ban la: " + otp
+                        + "\nMa co hieu luc trong 5 phut."
+        );
+    }
+
+    public void sendPasswordReset(String email, String otp) {
+        sendMail(
+                email,
+                "Revo - Dat lai mat khau",
+                "Ban da yeu cau dat lai mat khau Revo."
+                        + "\nMa xac minh cua ban la: " + otp
+                        + "\nMa co hieu luc trong 5 phut."
+                        + "\nNeu khong yeu cau, hay bo qua email nay."
+        );
+    }
+
+    private void sendMail(
+            String email,
+            String subject,
+            String content
+    ) {
         SimpleMailMessage message = new SimpleMailMessage();
 
         message.setFrom(from);
         message.setTo(email);
-        message.setSubject("Revo - Xac minh tai khoan");
-        message.setText(
-                "Ma xac minh Revo cua ban la: " + otp
-                        + "\nMa co hieu luc trong 5 phut."
-        );
+        message.setSubject(subject);
+        message.setText(content);
 
         try {
             mailSender.send(message);
@@ -43,4 +65,5 @@ public class EmailOtpSender {
             );
         }
     }
+
 }

@@ -300,6 +300,11 @@ public enum ErrorCode {
             "Không tìm thấy đơn hàng."
     ),
 
+    OTP_INVALID_OR_EXPIRED(
+            HttpStatus.UNPROCESSABLE_CONTENT,
+            "Mã xác minh không hợp lệ hoặc đã hết hạn."
+    ),
+
     INVALID_STATUS_FILTER(
             HttpStatus.BAD_REQUEST,
             "Trạng thái lọc không hợp lệ."

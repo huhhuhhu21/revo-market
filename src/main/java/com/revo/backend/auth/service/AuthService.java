@@ -30,11 +30,27 @@ import java.util.Locale;
 
 import java.util.Locale;
 
+import org.springframework.transaction.interceptor.TransactionAspectSupport;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+
 @Service
 public class AuthService {
 
     private static final Pattern EMAIL_PATTERN =
             Pattern.compile("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$");
+
+    private static final Logger log =
+            LoggerFactory.getLogger(AuthService.class);
+
+    private static final Pattern PHONE_PATTERN =
+            Pattern.compile("^(?:0[0-9]{9}|\\+84[0-9]{9})$");
+
+    private static final String FORGOT_PASSWORD_MESSAGE =
+            "Hệ thống đã gửi mã xác minh tới %s. ";
+
+
 
     private final UserRepository userRepository;
     private final OtpCodeRepository otpCodeRepository;
@@ -536,6 +552,247 @@ public class AuthService {
         // 5. Đánh dấu thu hồi phiên.
         session.revoke(now);
     }
+
+
+
+    @Transactional
+    public ForgotPasswordResponse forgotPassword(
+            ForgotPasswordRequest request
+    ) {
+        String login = request.login().strip();
+
+        ForgotPasswordResponse response =
+                new ForgotPasswordResponse(
+                        FORGOT_PASSWORD_MESSAGE.formatted(request.login().strip())
+                );
+
+        // Hiện chỉ hỗ trợ gửi OTP qua email.
+        // Số điện thoại hợp lệ vẫn nhận phản hồi trung tính.
+        if (!login.contains("@")) {
+            if (!PHONE_PATTERN.matcher(login).matches()) {
+                throw new BusinessException(
+                        ErrorCode.VALIDATION_ERROR
+                );
+            }
+
+            return response;
+        }
+
+        String email = login.toLowerCase(Locale.ROOT);
+
+        if (!EMAIL_PATTERN.matcher(email).matches()) {
+            throw new BusinessException(
+                    ErrorCode.VALIDATION_ERROR
+            );
+        }
+
+        // Khóa User để tránh tạo nhiều OTP đồng thời.
+        User user = userRepository
+                .findByEmailForUpdate(email)
+                .orElse(null);
+
+        // Không tiết lộ tài khoản có tồn tại hay không.
+        if (user == null || !user.isEmailVerified()) {
+            return response;
+        }
+
+        LocalDateTime now =
+                LocalDateTime.now(ZoneOffset.UTC);
+
+        OtpCode previousOtp = otpCodeRepository
+                .findFirstByUser_IdAndPurposeOrderByIdDesc(
+                        user.getId(),
+                        "PASSWORD_RESET"
+                )
+                .orElse(null);
+
+        // Giới hạn gửi lại tối thiểu 60 giây.
+        // Không trả 429 riêng cho tài khoản có thật,
+        // vì có thể làm lộ sự tồn tại của tài khoản.
+        if (previousOtp != null
+                && previousOtp.getLastSentAt() != null
+                && now.isBefore(
+                previousOtp.getLastSentAt().plusSeconds(60)
+        )) {
+            return response;
+        }
+
+        String otp = String.format(
+                Locale.ROOT,
+                "%06d",
+                secureRandom.nextInt(1_000_000)
+        );
+
+        String otpHash = passwordEncoder.encode(otp);
+
+        // OTP cũ không còn được sử dụng sau khi cấp mã mới.
+        if (previousOtp != null
+                && previousOtp.getConsumedAt() == null) {
+            previousOtp.markConsumed(now);
+        }
+
+        OtpCode newOtp = new OtpCode(
+                user,
+                email,
+                "PASSWORD_RESET",
+                otpHash,
+                now.plusMinutes(5)
+        );
+
+        otpCodeRepository.saveAndFlush(newOtp);
+
+        try {
+            emailOtpSender.sendPasswordReset(email, otp);
+        } catch (BusinessException ex) {
+            if (ex.getErrorCode()
+                    != ErrorCode.OTP_DELIVERY_UNAVAILABLE) {
+                throw ex;
+            }
+
+            // SMTP thất bại: không lưu OTP mới,
+            // đồng thời giữ OTP cũ nếu còn hợp lệ.
+            TransactionAspectSupport
+                    .currentTransactionStatus()
+                    .setRollbackOnly();
+
+            log.warn(
+                    "Password reset OTP email delivery unavailable."
+            );
+        }
+
+        return response;
+    }
+
+
+    @Transactional(noRollbackFor = OtpAttemptException.class)
+    public void resetPassword(ResetPasswordRequest request) {
+
+        // 1. Chuẩn hóa thông tin đăng nhập.
+        String login = request.login().strip();
+        boolean emailLogin = login.contains("@");
+
+        if (emailLogin) {
+            login = login.toLowerCase(Locale.ROOT);
+        }
+
+        // BCrypt trong dự án giới hạn mật khẩu ở 72 byte UTF-8.
+        if (request.newPassword()
+                .getBytes(StandardCharsets.UTF_8).length > 72) {
+            throw new BusinessException(
+                    ErrorCode.VALIDATION_ERROR
+            );
+        }
+
+        // 2. Tìm và khóa User.
+        User user = (
+                emailLogin
+                        ? userRepository.findByEmailForUpdate(login)
+                        : userRepository.findByPhoneForUpdate(login)
+        ).orElse(null);
+
+        // Không tiết lộ tài khoản có tồn tại hay không.
+        if (user == null) {
+            passwordEncoder.matches(
+                    request.otp(),
+                    dummyPasswordHash
+            );
+
+            throw new BusinessException(
+                    ErrorCode.OTP_INVALID_OR_EXPIRED
+            );
+        }
+
+        // 3. Kiểm tra liên hệ đã được xác minh.
+        String target = emailLogin
+                ? user.getEmail()
+                : user.getPhone();
+
+        boolean contactVerified = emailLogin
+                ? user.isEmailVerified()
+                : user.isPhoneVerified();
+
+        if (!contactVerified || target == null) {
+            passwordEncoder.matches(
+                    request.otp(),
+                    dummyPasswordHash
+            );
+
+            throw new BusinessException(
+                    ErrorCode.OTP_INVALID_OR_EXPIRED
+            );
+        }
+
+        // 4. Lấy OTP PASSWORD_RESET mới nhất.
+        OtpCode otpCode = otpCodeRepository
+                .findFirstByUser_IdAndPurposeOrderByIdDesc(
+                        user.getId(),
+                        "PASSWORD_RESET"
+                )
+                .orElse(null);
+
+        // 5. Kiểm tra OTP có đúng đích và chưa sử dụng.
+        if (otpCode == null
+                || !target.equals(otpCode.getTargetOtp())
+                || otpCode.getConsumedAt() != null) {
+
+            passwordEncoder.matches(
+                    request.otp(),
+                    dummyPasswordHash
+            );
+
+            throw new BusinessException(
+                    ErrorCode.OTP_INVALID_OR_EXPIRED
+            );
+        }
+
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+
+        // 6. Kiểm tra thời gian hết hạn.
+        if (!now.isBefore(otpCode.getExpiresAt())) {
+            throw new BusinessException(
+                    ErrorCode.OTP_INVALID_OR_EXPIRED
+            );
+        }
+
+        // 7. Kiểm tra giới hạn nhập sai.
+        if (otpCode.getFailedAttempts() >= 5) {
+            throw new BusinessException(
+                    ErrorCode.OTP_ATTEMPTS_EXCEEDED
+            );
+        }
+
+        // 8. Đối chiếu OTP với hash đã lưu.
+        if (!passwordEncoder.matches(
+                request.otp(),
+                otpCode.getCodeHash()
+        )) {
+            otpCode.incrementFailedAttempts();
+
+            ErrorCode errorCode =
+                    otpCode.getFailedAttempts() >= 5
+                            ? ErrorCode.OTP_ATTEMPTS_EXCEEDED
+                            : ErrorCode.OTP_INVALID_OR_EXPIRED;
+
+            throw new OtpAttemptException(errorCode);
+        }
+
+        // 9. Mã hóa và cập nhật mật khẩu mới.
+        String newPasswordHash = passwordEncoder.encode(
+                request.newPassword()
+        );
+
+        user.changePasswordHash(newPasswordHash);
+
+        // 10. Đánh dấu OTP đã sử dụng.
+        otpCode.markConsumed(now);
+
+        // 11. Thu hồi tất cả phiên của tài khoản.
+        refreshTokenRepository.revokeAllActiveByUserId(
+                user.getId(),
+                now
+        );
+    }
+
 
 
 }

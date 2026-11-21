@@ -50,17 +50,36 @@ public class OtpCode {
     protected OtpCode() {
     }
 
+
     public OtpCode(
             User user,
             String targetOtp,
             String codeHash,
             LocalDateTime expiresAt
     ) {
+        this(
+                user,
+                targetOtp,
+                "REGISTER",
+                codeHash,
+                expiresAt
+        );
+    }
+
+    public OtpCode(
+            User user,
+            String targetOtp,
+            String purpose,
+            String codeHash,
+            LocalDateTime expiresAt
+    ) {
         this.user = user;
         this.targetOtp = targetOtp;
+        this.purpose = purpose;
         this.codeHash = codeHash;
         this.expiresAt = expiresAt;
     }
+
 
     public String getTargetOtp() {
         return targetOtp;
@@ -91,6 +110,7 @@ public class OtpCode {
     public void markConsumed(LocalDateTime time) {
         this.consumedAt = time;
     }
+
 
 
 }

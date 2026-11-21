@@ -181,5 +181,9 @@ public class User {
         this.loginLockedUntil = null;
     }
 
+    public void changePasswordHash(String newPasswordHash) {
+        this.passwordHash = newPasswordHash;
+    }
+
 
 }
