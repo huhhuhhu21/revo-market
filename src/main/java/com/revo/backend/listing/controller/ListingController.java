@@ -114,4 +114,21 @@ public class ListingController {
                 listingId
         );
     }
+
+
+    @PostMapping("/{listingId}/hide")
+    public ListingDetailResponse hide(
+            @PathVariable String listingId,
+            @AuthenticationPrincipal Jwt jwt
+    ) {
+        Long sellerId = Long.parseLong(
+                jwt.getSubject()
+        );
+
+        return listingService.hide(
+                sellerId,
+                listingId
+        );
+    }
+
 }

@@ -319,6 +319,11 @@ public enum ErrorCode {
     ),
 
 
+    LISTING_NOT_HIDEABLE(
+            HttpStatus.CONFLICT,
+            "Trạng thái bài đăng không cho phép ẩn."
+    ),
+
     USER_NOT_FOUND(
             HttpStatus.NOT_FOUND,
             "Không tìm thấy người dùng."

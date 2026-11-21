@@ -174,6 +174,12 @@ public class ProductListing {
         this.deleted = true;
     }
 
+    public void hideBySeller() {
+        this.status = ListingStatus.HIDDEN;
+        this.hiddenReasonType = "SELLER";
+    }
+
+
     public void markInTransaction() {
         if (getStatus() != ListingStatus.AVAILABLE
                 || getHiddenReasonType() != null

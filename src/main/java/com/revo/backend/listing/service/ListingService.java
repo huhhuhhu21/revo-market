@@ -1466,6 +1466,104 @@ public class ListingService {
         );
     }
 
+    @Transactional
+    public ListingDetailResponse hide(
+            Long sellerId,
+            String rawListingId
+    ) {
+        // 1. Kiểm tra ID bài đăng.
+        Long listingId = parseListingId(rawListingId);
+
+        // 2. Khóa tài khoản như B08/B09.
+        User seller = userRepository
+                .findByIdForUpdate(sellerId)
+                .orElseThrow(() -> new BusinessException(
+                        ErrorCode.UNAUTHORIZED
+                ));
+
+        if (seller.getRole() != User.Role.USER) {
+            throw new BusinessException(
+                    ErrorCode.FORBIDDEN
+            );
+        }
+
+        if (seller.getStatus() != User.Status.ACTIVE) {
+            throw new BusinessException(
+                    ErrorCode.ACCOUNT_RESTRICTED
+            );
+        }
+
+        // 3. Khóa bài đăng để tránh thao tác đồng thời.
+        ProductListing listing = listingRepository
+                .findByIdForUpdate(listingId)
+                .orElseThrow(() -> new BusinessException(
+                        ErrorCode.LISTING_NOT_FOUND
+                ));
+
+        // 4. Kiểm tra quyền sở hữu.
+        if (!listing.getSeller().getId().equals(sellerId)) {
+            throw new BusinessException(
+                    ErrorCode.NOT_LISTING_OWNER
+            );
+        }
+
+        if (listing.isDeleted()) {
+            throw new BusinessException(
+                    ErrorCode.LISTING_NOT_FOUND
+            );
+        }
+
+        if (listing.isAdminHidden()) {
+            throw new BusinessException(
+                    ErrorCode.LISTING_ADMIN_HIDDEN
+            );
+        }
+
+        // 5. Không ẩn khi còn yêu cầu mua hoặc đơn đang xử lý.
+        boolean hasPendingRequest =
+                listingRepository.countPendingRequests(
+                        listingId
+                ) > 0;
+
+        boolean hasActiveOrder =
+                listingRepository.countActiveOrders(
+                        listingId
+                ) > 0;
+
+        if (hasPendingRequest || hasActiveOrder) {
+            throw new BusinessException(
+                    ErrorCode.LISTING_LOCKED
+            );
+        }
+
+        // 6. Retry an toàn: đã tự ẩn thì giữ nguyên.
+        if (listing.getStatus() == ListingStatus.HIDDEN
+                && "SELLER".equals(
+                listing.getHiddenReasonType()
+        )) {
+            return getDetail(rawListingId, sellerId);
+        }
+
+        // 7. Chỉ AVAILABLE mới được chuyển sang HIDDEN.
+        if (listing.getStatus() != ListingStatus.AVAILABLE
+                || listing.getHiddenReasonType() != null) {
+            throw new BusinessException(
+                    ErrorCode.LISTING_NOT_HIDEABLE
+            );
+        }
+
+        // 8. Chuyển trạng thái bài đăng.
+        listing.hideBySeller();
+
+        listingRepository.saveAndFlush(listing);
+
+        // Đọc lại updatedAt do MySQL quản lý.
+        entityManager.refresh(listing);
+
+        // 9. Trả DTO chi tiết với quyền của chủ bài.
+        return getDetail(rawListingId, sellerId);
+    }
+
 
 
 
