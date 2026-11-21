@@ -139,4 +139,52 @@ public final class ListingSpecifications {
         };
     }
 
+
+    public static Specification<ProductListing> publicSellerListings(
+            Long sellerId,
+            ListingStatus status
+    ) {
+        return (root, query, cb) -> {
+            List<Predicate> predicates = new ArrayList<>();
+
+            var seller = root.join("seller", JoinType.INNER);
+
+            predicates.add(cb.equal(
+                    seller.get("id"),
+                    sellerId
+            ));
+
+            // Tài khoản bị hạn chế không có bài công khai.
+            predicates.add(cb.equal(
+                    seller.get("status"),
+                    User.Status.ACTIVE
+            ));
+
+            // Không công khai bài bị ẩn hoặc xóa.
+            predicates.add(cb.isFalse(root.get("deleted")));
+            predicates.add(cb.isFalse(root.get("adminHidden")));
+            predicates.add(cb.isNull(root.get("hiddenReasonType")));
+
+            // ALL chỉ bao gồm AVAILABLE và SOLD.
+            if (status == null) {
+                predicates.add(
+                        root.get("status").in(
+                                ListingStatus.AVAILABLE,
+                                ListingStatus.SOLD
+                        )
+                );
+            } else {
+                predicates.add(cb.equal(
+                        root.get("status"),
+                        status
+                ));
+            }
+
+            return cb.and(
+                    predicates.toArray(Predicate[]::new)
+            );
+        };
+    }
+
+
 }

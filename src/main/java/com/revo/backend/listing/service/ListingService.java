@@ -1375,5 +1375,98 @@ public class ListingService {
     }
 
 
+    @Transactional(readOnly = true)
+    public ListingSearchResponse getSellerPublicListings(
+            Long sellerId,
+            String rawPage,
+            String rawSize,
+            String rawStatus
+    ) {
+        int page = parsePage(rawPage);
+        validateSize(rawSize);
+
+        ListingStatus status = null;
+
+        if (rawStatus != null && !rawStatus.equals("ALL")) {
+            if (rawStatus.equals("AVAILABLE")) {
+                status = ListingStatus.AVAILABLE;
+            } else if (rawStatus.equals("SOLD")) {
+                status = ListingStatus.SOLD;
+            } else {
+                throw new BusinessException(
+                        ErrorCode.INVALID_STATUS_FILTER
+                );
+            }
+        }
+
+        // Kiểm tra người dùng theo chính sách hồ sơ công khai.
+        User seller = userRepository.findById(sellerId)
+                .orElseThrow(() -> new BusinessException(
+                        ErrorCode.USER_NOT_FOUND
+                ));
+
+        if (seller.getRole() != User.Role.USER
+                || seller.getStatus()
+                == User.Status.PENDING_VERIFICATION) {
+            throw new BusinessException(
+                    ErrorCode.USER_NOT_FOUND
+            );
+        }
+
+        Pageable pageable = PageRequest.of(
+                page,
+                PAGE_SIZE,
+                Sort.by(
+                        Sort.Order.desc("createdAt"),
+                        Sort.Order.desc("id")
+                )
+        );
+
+        Page<ProductListing> result = listingRepository.findAll(
+                ListingSpecifications.publicSellerListings(
+                        sellerId,
+                        status
+                ),
+                pageable
+        );
+
+        List<Long> ids = result.getContent()
+                .stream()
+                .map(ProductListing::getId)
+                .toList();
+
+        // Dùng lại cơ chế lấy và ký URL ảnh của B02.
+        Map<Long, String> thumbnails = ids.isEmpty()
+                ? Map.of()
+                : imageRepository.findCoverImages(ids)
+                .stream()
+                .collect(Collectors.toMap(
+                        ListingImage::getListingId,
+                        image -> mediaService.presignImageUrl(
+                                image.getImageUrl()
+                        ),
+                        (first, ignored) -> first
+                ));
+
+        List<ListingSearchResponse.ListingCard> items =
+                result.getContent()
+                        .stream()
+                        .map(listing -> toCard(
+                                listing,
+                                thumbnails.get(listing.getId())
+                        ))
+                        .toList();
+
+        return new ListingSearchResponse(
+                items,
+                page,
+                PAGE_SIZE,
+                result.getTotalElements(),
+                result.hasNext()
+        );
+    }
+
+
+
 
 }
