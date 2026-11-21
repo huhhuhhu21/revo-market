@@ -11,6 +11,9 @@ import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
+
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 
 public interface ListingRepository
@@ -74,4 +77,33 @@ public interface ListingRepository
     Optional<ProductListing> findByIdForUpdate(
             @Param("listingId") Long listingId
     );
+
+
+
+    @Query(value = """
+    SELECT pr.listing_id
+    FROM purchase_requests pr
+    WHERE pr.listing_id IN (:listingIds)
+      AND pr.status = 'PENDING'
+    GROUP BY pr.listing_id
+    """, nativeQuery = true)
+    List<Long> findListingIdsWithPendingRequests(
+            @Param("listingIds") Collection<Long> listingIds
+    );
+
+    @Query(value = """
+    SELECT o.listing_id
+    FROM orders o
+    WHERE o.listing_id IN (:listingIds)
+      AND o.status IN (
+          'PENDING_PICKUP',
+          'IN_TRANSIT',
+          'DELIVERED'
+      )
+    GROUP BY o.listing_id
+    """, nativeQuery = true)
+    List<Long> findListingIdsWithActiveOrders(
+            @Param("listingIds") Collection<Long> listingIds
+    );
+
 }

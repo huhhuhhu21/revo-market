@@ -395,29 +395,38 @@ public class ListingService {
             String lockReason
     ) {}
 
+
     private OwnerActions resolveOwnerActions(
             ProductListing listing
     ) {
-        boolean activeSeller =
-                listing.getSeller().getStatus() == User.Status.ACTIVE;
-
-        boolean adminHidden = listing.isAdminHidden();
-
-        boolean hasPending =
+        return resolveOwnerActions(
+                listing,
                 listingRepository.countPendingRequests(
                         listing.getId()
-                ) > 0;
-
-        boolean hasActiveOrder =
+                ) > 0,
                 listingRepository.countActiveOrders(
                         listing.getId()
-                ) > 0;
+                ) > 0
+        );
+    }
+
+    private OwnerActions resolveOwnerActions(
+            ProductListing listing,
+            boolean hasPending,
+            boolean hasActiveOrder
+    ) {
+        boolean activeSeller =
+                listing.getSeller().getStatus()
+                        == User.Status.ACTIVE;
+
+        boolean adminHidden = listing.isAdminHidden();
 
         boolean unlocked =
                 activeSeller
                         && !adminHidden
                         && !hasPending
                         && !hasActiveOrder;
+
 
         boolean available =
                 listing.getStatus() == ListingStatus.AVAILABLE;
@@ -1236,4 +1245,135 @@ public class ListingService {
         // 11. Ghi thay đổi vào MySQL.
         listingRepository.saveAndFlush(listing);
     }
+
+
+    @Transactional(readOnly = true)
+    public MyListingsResponse getMyListings(
+            Long sellerId,
+            String rawPage,
+            String rawSize,
+            String rawStatus
+    ) {
+        int page = parsePage(rawPage);
+        validateSize(rawSize);
+
+        ListingStatus status = null;
+
+        if (rawStatus != null && !rawStatus.equals("ALL")) {
+            try {
+                status = ListingStatus.valueOf(rawStatus);
+            } catch (IllegalArgumentException ex) {
+                throw new BusinessException(
+                        ErrorCode.INVALID_STATUS_FILTER
+                );
+            }
+        }
+
+        Pageable pageable = PageRequest.of(
+                page,
+                PAGE_SIZE,
+                Sort.by(
+                        Sort.Order.desc("createdAt"),
+                        Sort.Order.desc("id")
+                )
+        );
+
+        Page<ProductListing> result = listingRepository.findAll(
+                ListingSpecifications.ownedBy(sellerId, status),
+                pageable
+        );
+
+        List<Long> ids = result.getContent()
+                .stream()
+                .map(ProductListing::getId)
+                .toList();
+
+        if (ids.isEmpty()) {
+            return new MyListingsResponse(
+                    List.of(),
+                    page,
+                    PAGE_SIZE,
+                    result.getTotalElements(),
+                    result.hasNext()
+            );
+        }
+
+        Map<Long, String> thumbnails =
+                imageRepository.findCoverImages(ids)
+                        .stream()
+                        .collect(Collectors.toMap(
+                                ListingImage::getListingId,
+                                image -> mediaService.presignImageUrl(
+                                        image.getImageUrl()
+                                ),
+                                (first, ignored) -> first
+                        ));
+
+        Set<Long> pendingIds = new HashSet<>(
+                listingRepository.findListingIdsWithPendingRequests(ids)
+        );
+
+        Set<Long> activeOrderIds = new HashSet<>(
+                listingRepository.findListingIdsWithActiveOrders(ids)
+        );
+
+        List<MyListingsResponse.OwnerListingCard> items =
+                result.getContent().stream()
+                        .map(listing -> {
+                            OwnerActions actions = resolveOwnerActions(
+                                    listing,
+                                    pendingIds.contains(listing.getId()),
+                                    activeOrderIds.contains(listing.getId())
+                            );
+
+                            return toOwnerCard(
+                                    listing,
+                                    thumbnails.get(listing.getId()),
+                                    actions
+                            );
+                        })
+                        .toList();
+
+        return new MyListingsResponse(
+                items,
+                page,
+                PAGE_SIZE,
+                result.getTotalElements(),
+                result.hasNext()
+        );
+    }
+
+    private MyListingsResponse.OwnerListingCard toOwnerCard(
+            ProductListing listing,
+            String thumbnailUrl,
+            OwnerActions actions
+    ) {
+        ListingSearchResponse.ListingCard card =
+                toCard(listing, thumbnailUrl);
+
+        return new MyListingsResponse.OwnerListingCard(
+                card.id(),
+                card.title(),
+                card.listedPrice(),
+                card.itemCondition(),
+                card.category(),
+                card.province(),
+                card.ward(),
+                card.thumbnailUrl(),
+                card.status(),
+                card.createdAt(),
+                listing.getHiddenReasonType(),
+                listing.isAdminHidden(),
+                listing.isDeleted(),
+                actions.canEdit(),
+                actions.canHide(),
+                actions.canRestore(),
+                actions.canDelete(),
+                actions.canMarkSold(),
+                actions.lockReason()
+        );
+    }
+
+
+
 }

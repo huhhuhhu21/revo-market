@@ -109,4 +109,34 @@ public final class ListingSpecifications {
                 .replace("%", "!%")
                 .replace("_", "!_");
     }
+
+
+    public static Specification<ProductListing> ownedBy(
+            Long sellerId,
+            ListingStatus status
+    ) {
+        return (root, query, cb) -> {
+            List<Predicate> predicates = new ArrayList<>();
+
+            predicates.add(cb.equal(
+                    root.get("seller").get("id"),
+                    sellerId
+            ));
+
+            // Bài đã xóa logic không còn trong danh sách quản lý.
+            predicates.add(cb.isFalse(root.get("deleted")));
+
+            if (status != null) {
+                predicates.add(cb.equal(
+                        root.get("status"),
+                        status
+                ));
+            }
+
+            return cb.and(
+                    predicates.toArray(Predicate[]::new)
+            );
+        };
+    }
+
 }
