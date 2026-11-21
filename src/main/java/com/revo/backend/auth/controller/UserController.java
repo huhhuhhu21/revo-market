@@ -3,6 +3,7 @@ package com.revo.backend.auth.controller;
 
 import com.revo.backend.auth.dto.ChangePasswordRequest;
 import com.revo.backend.auth.dto.PrivateUserResponse;
+import com.revo.backend.auth.dto.PublicUserProfileResponse;
 import com.revo.backend.auth.service.AuthService;
 
 import jakarta.validation.Valid;
@@ -61,6 +62,15 @@ public class UserController {
                 request
         );
     }
+
+
+    @GetMapping("/{userId}/public-profile")
+    public PublicUserProfileResponse getPublicProfile(
+            @PathVariable("userId") Long userId
+    ) {
+        return authService.getPublicProfile(userId);
+    }
+
 
 
 }

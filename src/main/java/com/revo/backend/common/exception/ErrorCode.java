@@ -319,6 +319,13 @@ public enum ErrorCode {
     ),
 
 
+    USER_NOT_FOUND(
+            HttpStatus.NOT_FOUND,
+            "Không tìm thấy người dùng."
+    ),
+
+
+
     INVALID_STATUS_FILTER(
             HttpStatus.BAD_REQUEST,
             "Trạng thái lọc không hợp lệ."

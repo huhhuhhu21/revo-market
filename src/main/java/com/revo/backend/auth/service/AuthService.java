@@ -1071,9 +1071,31 @@ public class AuthService {
         return value;
     }
 
+    @Transactional(readOnly = true)
+    public PublicUserProfileResponse getPublicProfile(
+            Long userId
+    ) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new BusinessException(
+                        ErrorCode.USER_NOT_FOUND
+                ));
 
+        // Chỉ công khai hồ sơ USER đã kích hoạt.
+        if (user.getRole() != User.Role.USER
+                || user.getStatus()
+                == User.Status.PENDING_VERIFICATION) {
+            throw new BusinessException(
+                    ErrorCode.USER_NOT_FOUND
+            );
+        }
 
-
+        return new PublicUserProfileResponse(
+                user.getId(),
+                user.getFullName(),
+                user.getAvatarUrl(),
+                user.getCreatedAt().toInstant(ZoneOffset.UTC)
+        );
+    }
 
 
 }
