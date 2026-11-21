@@ -10,6 +10,7 @@ import com.revo.backend.auth.repository.UserRepository;
 import com.revo.backend.common.exception.BusinessException;
 import com.revo.backend.common.exception.ErrorCode;
 
+import jakarta.persistence.EntityManager;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -34,6 +35,9 @@ import org.springframework.transaction.interceptor.TransactionAspectSupport;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import tools.jackson.databind.JsonNode;
+import jakarta.persistence.EntityManager;
+
 
 @Service
 public class AuthService {
@@ -56,7 +60,7 @@ public class AuthService {
     private final OtpCodeRepository otpCodeRepository;
     private final PasswordEncoder passwordEncoder;
     private final EmailOtpSender emailOtpSender;
-
+    private final EntityManager entityManager;
 
     private final SecureRandom secureRandom = new SecureRandom();
 
@@ -80,7 +84,8 @@ public class AuthService {
             PasswordEncoder passwordEncoder,
             EmailOtpSender emailOtpSender,
             TokenService tokenService,
-            RefreshTokenRepository refreshTokenRepository
+            RefreshTokenRepository refreshTokenRepository,
+            EntityManager entityManager
     ) {
         this.userRepository = userRepository;
         this.otpCodeRepository = otpCodeRepository;
@@ -92,6 +97,9 @@ public class AuthService {
                 "dummy-password-for-missing-user"
         );
         this.refreshTokenRepository = refreshTokenRepository;
+
+        this.entityManager = entityManager;
+
     }
 
     @Transactional
@@ -855,6 +863,215 @@ public class AuthService {
                 now
         );
     }
+
+    @Transactional(readOnly = true)
+    public PrivateUserResponse getMyProfile(Long userId) {
+
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new BusinessException(
+                        ErrorCode.UNAUTHORIZED
+                ));
+
+        return new PrivateUserResponse(
+                user.getId(),
+                user.getRole().name(),
+                user.getStatus().name(),
+                user.getFullName(),
+                user.getEmail(),
+                user.getPhone(),
+                user.isEmailVerified(),
+                user.isPhoneVerified(),
+                user.getAvatarUrl(),
+                user.getAddressLine(),
+                user.getProvince(),
+                user.getWard(),
+                user.getCreatedAt().toInstant(ZoneOffset.UTC),
+                user.getUpdatedAt().toInstant(ZoneOffset.UTC)
+        );
+    }
+
+
+    @Transactional
+    public PrivateUserResponse updateMyProfile(
+            Long userId,
+            JsonNode patch
+    ) {
+        if (patch == null
+                || !patch.isObject()
+                || patch.size() == 0) {
+            throw new BusinessException(
+                    ErrorCode.VALIDATION_ERROR
+            );
+        }
+
+
+        String[] allowedFields = {
+                "fullName",
+                "phone",
+                "avatarUrl",
+                "addressLine",
+                "province",
+                "ward"
+        };
+
+
+        int recognizedFields = 0;
+
+        for (String field : allowedFields) {
+            if (patch.has(field)) {
+                recognizedFields++;
+            }
+        }
+
+        // Chặn các trường không thuộc whitelist.
+        if (recognizedFields != patch.size()) {
+            throw new BusinessException(
+                    ErrorCode.VALIDATION_ERROR
+            );
+        }
+
+        User user = userRepository
+                .findByIdForUpdate(userId)
+                .orElseThrow(() -> new BusinessException(
+                        ErrorCode.UNAUTHORIZED
+                ));
+
+        if (patch.has("fullName")) {
+            JsonNode nameNode = patch.get("fullName");
+
+            if (!nameNode.isTextual()) {
+                throw new BusinessException(
+                        ErrorCode.VALIDATION_ERROR
+                );
+            }
+
+            String fullName = nameNode.textValue().strip();
+
+            if (fullName.isEmpty()
+                    || fullName.length() > 120) {
+                throw new BusinessException(
+                        ErrorCode.VALIDATION_ERROR
+                );
+            }
+
+            user.updateFullName(fullName);
+        }
+
+
+        if (patch.has("phone")) {
+            String phone = parseProfileText(
+                    patch.get("phone"), 20
+            );
+
+            if (phone != null) {
+                // Kiểm tra định dạng cơ bản.
+                if (!phone.matches("^(0\\d{9}|\\+84\\d{9})$")) {
+                    throw new BusinessException(
+                            ErrorCode.VALIDATION_ERROR
+                    );
+                }
+
+                if (userRepository.existsByPhoneAndIdNot(
+                        phone, userId
+                )) {
+                    throw new BusinessException(
+                            ErrorCode.CONTACT_ALREADY_USED
+                    );
+                }
+            } else if (user.getEmail() == null) {
+                // Database yêu cầu có ít nhất một liên hệ.
+                throw new BusinessException(
+                        ErrorCode.VALIDATION_ERROR
+                );
+            }
+
+            if (!java.util.Objects.equals(
+                    user.getPhone(), phone
+            )) {
+                user.updatePhone(phone);
+            }
+        }
+
+
+        if (patch.has("addressLine")) {
+            user.updateAddressLine(
+                    parseProfileText(
+                            patch.get("addressLine"), 255
+                    )
+            );
+        }
+
+        if (patch.has("province")) {
+            user.updateProvince(
+                    parseProfileText(
+                            patch.get("province"), 100
+                    )
+            );
+        }
+
+        if (patch.has("ward")) {
+            user.updateWard(
+                    parseProfileText(
+                            patch.get("ward"), 100
+                    )
+            );
+        }
+
+        if (patch.has("avatarUrl")) {
+            JsonNode avatarNode = patch.get("avatarUrl");
+
+            if (avatarNode.isNull()) {
+                user.clearAvatar();
+
+            } else if (!avatarNode.isTextual()
+                    || !avatarNode.textValue().equals(
+                    user.getAvatarUrl()
+            )) {
+
+                // Không nhận URL ảnh mới tùy ý.
+                // Luồng upload avatar cần triển khai riêng.
+                throw new BusinessException(
+                        ErrorCode.VALIDATION_ERROR
+                );
+            }
+        }
+
+        userRepository.saveAndFlush(user);
+
+        // Đọc lại các giá trị do database cập nhật.
+        entityManager.refresh(user);
+
+        // Tái sử dụng response của A10.
+        return getMyProfile(userId);
+    }
+
+    private String parseProfileText(
+            JsonNode node,
+            int maxLength
+    ) {
+        if (node.isNull()) {
+            return null;
+        }
+
+        if (!node.isTextual()) {
+            throw new BusinessException(
+                    ErrorCode.VALIDATION_ERROR
+            );
+        }
+
+        String value = node.textValue().strip();
+
+        if (value.isEmpty()
+                || value.length() > maxLength) {
+            throw new BusinessException(
+                    ErrorCode.VALIDATION_ERROR
+            );
+        }
+
+        return value;
+    }
+
+
 
 
 

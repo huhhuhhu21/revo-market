@@ -68,6 +68,23 @@ public class User {
     @Column(name = "avatar_url", length = 2048)
     private String avatarUrl;
 
+
+    @Column(name = "address_line", length = 255)
+    private String addressLine;
+
+    @Column(name = "province", length = 100)
+    private String province;
+
+    @Column(name = "ward", length = 100)
+    private String ward;
+
+    @Column(name = "created_at", insertable = false, updatable = false)
+    private LocalDateTime createdAt;
+
+    @Column(name = "updated_at", insertable = false, updatable = false)
+    private LocalDateTime updatedAt;
+
+
     protected User() {
     }
 
@@ -122,6 +139,28 @@ public class User {
     public boolean isPhoneVerified() {
         return phoneVerified;
     }
+
+
+    public String getAddressLine() {
+        return addressLine;
+    }
+
+    public String getProvince() {
+        return province;
+    }
+
+    public String getWard() {
+        return ward;
+    }
+
+    public LocalDateTime getCreatedAt() {
+        return createdAt;
+    }
+
+    public LocalDateTime getUpdatedAt() {
+        return updatedAt;
+    }
+
 
     public void activateWithEmail() {
         this.emailVerified = true;
@@ -189,6 +228,37 @@ public class User {
     public void updatePasswordHash(String newPasswordHash) {
         this.passwordHash = newPasswordHash;
     }
+
+
+    public void updateFullName(String fullName) {
+        this.fullName = fullName;
+    }
+
+    public void updateAddressLine(String addressLine) {
+        this.addressLine = addressLine;
+    }
+
+    public void updateProvince(String province) {
+        this.province = province;
+    }
+
+    public void updateWard(String ward) {
+        this.ward = ward;
+    }
+
+    public void clearAvatar() {
+        this.avatarUrl = null;
+    }
+
+
+    public void updatePhone(String phone) {
+        this.phone = phone;
+
+        // Không tự đánh dấu số điện thoại là đã xác minh.
+        this.phoneVerified = false;
+    }
+
+
 
 
 
