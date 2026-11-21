@@ -305,6 +305,20 @@ public enum ErrorCode {
             "Mã xác minh không hợp lệ hoặc đã hết hạn."
     ),
 
+
+    NEW_PASSWORD_SAME_AS_CURRENT(
+            HttpStatus.UNPROCESSABLE_CONTENT,
+            "Mật khẩu mới không được trùng với mật khẩu hiện tại."
+    ),
+
+
+
+    CURRENT_PASSWORD_INCORRECT(
+            HttpStatus.UNPROCESSABLE_CONTENT,
+            "Mật khẩu hiện tại không chính xác."
+    ),
+
+
     INVALID_STATUS_FILTER(
             HttpStatus.BAD_REQUEST,
             "Trạng thái lọc không hợp lệ."

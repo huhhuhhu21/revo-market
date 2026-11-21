@@ -186,4 +186,10 @@ public class User {
     }
 
 
+    public void updatePasswordHash(String newPasswordHash) {
+        this.passwordHash = newPasswordHash;
+    }
+
+
+
 }

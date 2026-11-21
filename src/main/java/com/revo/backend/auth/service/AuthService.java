@@ -794,5 +794,69 @@ public class AuthService {
     }
 
 
+    @Transactional
+    public void changePassword(
+            Long userId,
+            ChangePasswordRequest request
+    ) {
+        // Khóa User để tránh cập nhật mật khẩu đồng thời.
+        User user = userRepository
+                .findByIdForUpdate(userId)
+                .orElseThrow(() -> new BusinessException(
+                        ErrorCode.UNAUTHORIZED
+                ));
+
+        // Kiểm tra mật khẩu hiện tại.
+        if (!passwordEncoder.matches(
+                request.currentPassword(),
+                user.getPasswordHash()
+        )) {
+            throw new BusinessException(
+                    ErrorCode.CURRENT_PASSWORD_INCORRECT
+            );
+        }
+
+        // BCrypt giới hạn đầu vào tối đa 72 byte UTF-8.
+        String newPassword = request.newPassword();
+
+        if (newPassword
+                .getBytes(StandardCharsets.UTF_8).length > 72) {
+            throw new BusinessException(
+                    ErrorCode.VALIDATION_ERROR
+            );
+        }
+
+
+        // Không cho phép sử dụng lại mật khẩu hiện tại.
+        if (passwordEncoder.matches(
+                newPassword,
+                user.getPasswordHash()
+        )) {
+            throw new BusinessException(
+                    ErrorCode.NEW_PASSWORD_SAME_AS_CURRENT
+            );
+        }
+
+        // Lưu hash mới, không lưu mật khẩu thô.
+        String newPasswordHash =
+                passwordEncoder.encode(newPassword);
+
+        user.updatePasswordHash(newPasswordHash);
+
+
+        user.updatePasswordHash(newPasswordHash);
+
+        // Thu hồi tất cả phiên, gồm phiên hiện tại.
+        LocalDateTime now =
+                LocalDateTime.now(ZoneOffset.UTC);
+
+        refreshTokenRepository.revokeAllActiveByUserId(
+                userId,
+                now
+        );
+    }
+
+
+
 
 }
