@@ -72,6 +72,31 @@ public class Order {
     @Column(name = "delivered_at")
     private LocalDateTime deliveredAt;
 
+    @Column(name = "picked_up_at")
+    private LocalDateTime pickedUpAt;
+
+    @Column(name = "completed_at")
+    private LocalDateTime completedAt;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "canceled_by")
+    private User canceledBy;
+
+    @Column(name = "cancel_reason", columnDefinition = "TEXT")
+    private String cancelReason;
+
+    @Column(name = "canceled_at")
+    private LocalDateTime canceledAt;
+
+    @Column(name = "cod_collected_at")
+    private LocalDateTime codCollectedAt;
+
+    @Column(name = "cod_settled_at")
+    private LocalDateTime codSettledAt;
+
+    @Column(name = "cod_refunded_at")
+    private LocalDateTime codRefundedAt;
+
     protected Order() {}
 
     public static Order fromAcceptedRequest(
@@ -159,5 +184,56 @@ public class Order {
 
     public LocalDateTime getDeliveredAt() {
         return deliveredAt;
+    }
+
+    public LocalDateTime getPickedUpAt() {
+        return pickedUpAt;
+    }
+
+    public LocalDateTime getCompletedAt() {
+        return completedAt;
+    }
+
+    public User getCanceledBy() {
+        return canceledBy;
+    }
+
+    public String getCancelReason() {
+        return cancelReason;
+    }
+
+    public LocalDateTime getCanceledAt() {
+        return canceledAt;
+    }
+
+    public LocalDateTime getCodCollectedAt() {
+        return codCollectedAt;
+    }
+
+    public LocalDateTime getCodSettledAt() {
+        return codSettledAt;
+    }
+
+    public LocalDateTime getCodRefundedAt() {
+        return codRefundedAt;
+    }
+    public String getRecipientName() {
+        return recipientName;
+    }
+
+    public String getRecipientPhone() {
+        return recipientPhone;
+    }
+
+    public String getDeliveryAddressLine() {
+        return deliveryAddressLine;
+    }
+
+    public String getDeliveryProvince() {
+        return deliveryProvince;
+    }
+
+    public String getDeliveryWard() {
+        return deliveryWard;
     }
 }

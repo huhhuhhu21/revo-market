@@ -290,6 +290,16 @@ public enum ErrorCode {
             "Vai trò lọc đơn hàng không hợp lệ."
     ),
 
+    INVALID_ORDER_ID(
+            HttpStatus.BAD_REQUEST,
+            "ID đơn hàng không hợp lệ."
+    ),
+
+    ORDER_NOT_FOUND(
+            HttpStatus.NOT_FOUND,
+            "Không tìm thấy đơn hàng."
+    ),
+
     INVALID_STATUS_FILTER(
             HttpStatus.BAD_REQUEST,
             "Trạng thái lọc không hợp lệ."

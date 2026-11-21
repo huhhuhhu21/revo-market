@@ -22,7 +22,10 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import com.revo.backend.order.dto.OrderDetailResponse;
 
+import java.time.OffsetDateTime;
+import java.time.format.DateTimeParseException;
 @Service
 public class OrderService {
 
@@ -300,5 +303,294 @@ public class OrderService {
                 detailAccessible ? listing.getTitle() : null,
                 detailAccessible
         );
+    }
+
+    @Transactional(readOnly = true)
+    public OrderDetailResponse getOrderDetail(
+            Long currentUserId,
+            String rawOrderId
+    ) {
+        // 1. Kiểm tra ID.
+        Long orderId = parseOrderId(rawOrderId);
+
+        // 2. Chỉ lấy đơn của buyer hoặc seller.
+        Order order = orderRepository.findVisibleOrderDetail(
+                orderId,
+                currentUserId
+        ).orElseThrow(() -> new BusinessException(
+                ErrorCode.ORDER_NOT_FOUND
+        ));
+
+        boolean isBuyer = order.getBuyer()
+                .getId().equals(currentUserId);
+
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+
+        // 3. Đọc lịch sử vận chuyển.
+        List<OrderDetailResponse.ShippingEvent> timeline =
+                loadShippingTimeline(orderId);
+
+        // 4. Đọc các điều kiện UI có sẵn từ C08.
+        OrderUiConditions conditions =
+                loadUiConditions(List.of(order)).get(orderId);
+
+        if (conditions == null) {
+            throw new IllegalStateException(
+                    "Missing UI conditions for order " + orderId
+            );
+        }
+
+        // 5. Kiểm tra xem đơn có yêu cầu trả hàng chưa.
+        Long returnRequestId = orderRepository
+                .findReturnRequestId(orderId)
+                .orElse(null);
+
+        // 6. Xác định tình trạng yêu cầu hủy khi vận chuyển.
+        boolean cancellationRequested = false;
+        boolean returnShippingCompleted = false;
+        OffsetDateTime cancellationRequestedAt = null;
+
+        for (OrderDetailResponse.ShippingEvent event : timeline) {
+
+            if ("CANCEL_REQUESTED".equals(event.eventType())) {
+                cancellationRequested = true;
+                cancellationRequestedAt = event.recordedAt();
+            }
+
+            if ("RETURN_SHIPPING_COMPLETED".equals(
+                    event.eventType())) {
+                returnShippingCompleted = true;
+            }
+        }
+
+        boolean returnShippingPending =
+                order.getStatus() == OrderStatus.IN_TRANSIT
+                        && cancellationRequested
+                        && !returnShippingCompleted;
+
+        // 7. Quyền hủy đơn: thống nhất với C08.
+        boolean canCancel = false;
+
+        if (order.getStatus() == OrderStatus.PENDING_PICKUP) {
+
+            canCancel = !now.isAfter(
+                    order.getCreatedAt().plusHours(48)
+            );
+
+        } else if (order.getStatus() == OrderStatus.IN_TRANSIT) {
+
+            canCancel = isBuyer
+                    && !conditions.cancelRequested();
+        }
+
+        // 8. Quyền xác nhận hoàn thành.
+        boolean canConfirmCompletion =
+                isBuyer
+                        && order.getStatus() == OrderStatus.DELIVERED
+                        && order.getDeliveredAt() != null
+                        && order.getCodStatus() == CodStatus.HELD
+                        && !conditions.activeReturn()
+                        && !conditions.blockingException();
+
+        // 9. Quyền yêu cầu trả hàng.
+        // Đã COMPLETED sớm vẫn có thể trả trong 48 giờ.
+        boolean returnableStatus =
+                order.getStatus() == OrderStatus.DELIVERED
+                        || order.getStatus() == OrderStatus.COMPLETED;
+
+        boolean withinReturnWindow =
+                order.getDeliveredAt() != null
+                        && !now.isBefore(order.getDeliveredAt())
+                        && !now.isAfter(
+                        order.getDeliveredAt().plusHours(48)
+                );
+
+        boolean canRequestReturn =
+                isBuyer
+                        && order.getBuyer().getStatus() == User.Status.ACTIVE
+                        && returnableStatus
+                        && withinReturnWindow
+                        && order.getCodStatus() == CodStatus.HELD
+                        && returnRequestId == null
+                        && !conditions.blockingException();
+
+        // 10. Xác định người hủy nếu đã có.
+        OrderDetailResponse.CancelActor canceledBy = null;
+
+        if (order.getCanceledBy() != null) {
+
+            Long canceledById = order.getCanceledBy().getId();
+
+            String actorType;
+
+            if (canceledById.equals(order.getBuyer().getId())) {
+                actorType = "BUYER";
+            } else if (
+                    canceledById.equals(order.getSeller().getId())
+            ) {
+                actorType = "SELLER";
+            } else {
+                actorType = "ADMIN";
+            }
+
+            canceledBy = new OrderDetailResponse.CancelActor(
+                    canceledById,
+                    actorType
+            );
+        }
+
+        // 11. Trả chi tiết đơn hàng.
+        return new OrderDetailResponse(
+                order.getId(),
+                order.getPurchaseRequest().getId(),
+
+                buildListingRef(order, isBuyer),
+
+                new PurchaseRequestResponse.Party(
+                        order.getBuyer().getId(),
+                        order.getBuyer().getFullName()
+                ),
+
+                new PurchaseRequestResponse.Party(
+                        order.getSeller().getId(),
+                        order.getSeller().getFullName()
+                ),
+
+                order.getTransactionPrice(),
+                order.getShippingFee(),
+                order.getCodAmount(),
+
+                order.getStatus(),
+                order.getCodStatus(),
+
+                new PurchaseRequestResponse.DeliveryContact(
+                        order.getRecipientName(),
+                        order.getRecipientPhone(),
+                        order.getDeliveryAddressLine(),
+                        order.getDeliveryProvince(),
+                        order.getDeliveryWard()
+                ),
+
+                utc(order.getCreatedAt().plusHours(48)),
+                utc(order.getPickedUpAt()),
+                utc(order.getDeliveredAt()),
+                utc(order.getCompletedAt()),
+
+                utc(order.getCanceledAt()),
+                order.getCancelReason(),
+                canceledBy,
+
+                utc(order.getCodCollectedAt()),
+                utc(order.getCodSettledAt()),
+                utc(order.getCodRefundedAt()),
+
+                new OrderDetailResponse.Cancellation(
+                        returnShippingPending,
+                        cancellationRequestedAt
+                ),
+
+                timeline,
+                returnRequestId,
+
+                utc(order.getCreatedAt()),
+                utc(order.getUpdatedAt()),
+
+                canCancel,
+                canConfirmCompletion,
+                canRequestReturn
+        );
+    }
+
+    private static Long parseOrderId(String rawOrderId) {
+
+        if (rawOrderId == null
+                || !rawOrderId.matches("[0-9]+")) {
+
+            throw new BusinessException(
+                    ErrorCode.INVALID_ORDER_ID
+            );
+        }
+
+        try {
+            long orderId = Long.parseLong(rawOrderId);
+
+            if (orderId <= 0) {
+                throw new BusinessException(
+                        ErrorCode.INVALID_ORDER_ID
+                );
+            }
+
+            return orderId;
+
+        } catch (NumberFormatException ex) {
+            throw new BusinessException(
+                    ErrorCode.INVALID_ORDER_ID
+            );
+        }
+    }
+
+    private static OffsetDateTime utc(LocalDateTime value) {
+
+        return value == null
+                ? null
+                : value.atOffset(ZoneOffset.UTC);
+    }
+
+    private List<OrderDetailResponse.ShippingEvent>
+    loadShippingTimeline(Long orderId) {
+
+        List<Object[]> rows =
+                orderRepository.findShippingTimeline(orderId);
+
+        List<OrderDetailResponse.ShippingEvent> events =
+                new ArrayList<>();
+
+        for (Object[] row : rows) {
+
+            String eventType = row[0] == null
+                    ? null
+                    : row[0].toString();
+
+            OffsetDateTime actualAt =
+                    parseTimelineTime(row[1]);
+
+            OffsetDateTime recordedAt =
+                    parseTimelineTime(row[2]);
+
+            String actorType = row[3] == null
+                    ? null
+                    : row[3].toString();
+
+            events.add(
+                    new OrderDetailResponse.ShippingEvent(
+                            eventType,
+                            actualAt,
+                            recordedAt,
+                            actorType
+                    )
+            );
+        }
+
+        return events;
+    }
+
+    private static OffsetDateTime parseTimelineTime(
+            Object value
+    ) {
+        if (value == null) {
+            return null;
+        }
+
+        try {
+            return OffsetDateTime.parse(
+                    value.toString()
+            ).withOffsetSameInstant(ZoneOffset.UTC);
+
+        } catch (DateTimeParseException ex) {
+            throw new IllegalStateException(
+                    "Invalid shipping timeline timestamp",
+                    ex
+            );
+        }
     }
 }

@@ -71,4 +71,61 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
     List<Object[]> findOrderUiConditions(
             @Param("orderIds") List<Long> orderIds
     );
+
+    @Query("""
+        SELECT o
+        FROM Order o
+        JOIN FETCH o.purchaseRequest
+        JOIN FETCH o.listing
+        JOIN FETCH o.buyer b
+        JOIN FETCH o.seller s
+        LEFT JOIN FETCH o.canceledBy
+        WHERE o.id = :orderId
+          AND (
+              b.id = :userId
+              OR s.id = :userId
+          )
+        """)
+    Optional<Order> findVisibleOrderDetail(
+            @Param("orderId") Long orderId,
+            @Param("userId") Long userId
+    );
+
+    @Query(value = """
+        SELECT
+            jt.event_type,
+            jt.actual_at,
+            jt.recorded_at,
+            jt.actor_type
+        FROM orders o
+        CROSS JOIN JSON_TABLE(
+            o.shipping_history,
+            '$[*]'
+            COLUMNS (
+                seq_no FOR ORDINALITY,
+                event_type VARCHAR(64)
+                    PATH '$.event_type',
+                actual_at VARCHAR(40)
+                    PATH '$.actual_at',
+                recorded_at VARCHAR(40)
+                    PATH '$.recorded_at',
+                actor_type VARCHAR(24)
+                    PATH '$.actor_type'
+            )
+        ) AS jt
+        WHERE o.id = :orderId
+        ORDER BY jt.recorded_at ASC, jt.seq_no ASC
+        """, nativeQuery = true)
+    List<Object[]> findShippingTimeline(
+            @Param("orderId") Long orderId
+    );
+
+    @Query(value = """
+        SELECT r.id
+        FROM return_requests r
+        WHERE r.order_id = :orderId
+        """, nativeQuery = true)
+    Optional<Long> findReturnRequestId(
+            @Param("orderId") Long orderId
+    );
 }

@@ -7,7 +7,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.*;
-
+import com.revo.backend.order.dto.OrderDetailResponse;
 import java.util.List;
 
 @RestController
@@ -35,6 +35,24 @@ public class OrderController {
                         currentUserId,
                         role,
                         status
+                );
+
+        return ResponseEntity.ok(result);
+    }
+
+    @GetMapping("/{orderId}")
+    public ResponseEntity<OrderDetailResponse> getOrderDetail(
+            @PathVariable String orderId,
+            @AuthenticationPrincipal Jwt jwt
+    ) {
+        Long currentUserId = Long.parseLong(
+                jwt.getSubject()
+        );
+
+        OrderDetailResponse result =
+                orderService.getOrderDetail(
+                        currentUserId,
+                        orderId
                 );
 
         return ResponseEntity.ok(result);
