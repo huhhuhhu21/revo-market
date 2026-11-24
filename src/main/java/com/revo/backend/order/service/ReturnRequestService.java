@@ -510,4 +510,10 @@ public class ReturnRequestService {
         );
     }
 
+    ReturnRequestResponse toAdminResponse(
+            ReturnRequest returnRequest
+    ) {
+        return buildResponse(returnRequest, true);
+    }
+
 }
