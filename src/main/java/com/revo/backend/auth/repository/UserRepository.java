@@ -12,7 +12,7 @@ import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import java.util.Optional;
-
+import java.util.List;
 public interface UserRepository extends JpaRepository<User, Long> {
 
     boolean existsByPhoneAndIdNot(String phone, Long id);
@@ -39,4 +39,11 @@ public interface UserRepository extends JpaRepository<User, Long> {
     Optional<User> findByPhoneForUpdate(
             @Param("phone") String phone
     );
+
+
+    List<User> findAllByRoleAndStatus(
+            User.Role role,
+            User.Status status
+    );
+
 }

@@ -107,6 +107,20 @@ public class MediaService {
             Long userId,
             MultipartFile file
     ) {
+        return upload(userId, file, "LISTING_IMAGE");
+    }
+
+    public MediaUploadResponse upload(
+            Long userId,
+            MultipartFile file,
+            String purpose
+    ) {
+
+        if (!"LISTING_IMAGE".equals(purpose)
+                && !"RETURN_EVIDENCE".equals(purpose)) {
+            throw new BusinessException(ErrorCode.INVALID_FILTER);
+        }
+
         // 1. Kiểm tra tài khoản.
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new BusinessException(
@@ -162,9 +176,16 @@ public class MediaService {
         String mimeType = inspected.mimeType();
 
         // 3. Sinh tên file ngẫu nhiên.
-        String objectKey = "staging/listings/"
+
+        String stagingPrefix =
+                "RETURN_EVIDENCE".equals(purpose)
+                        ? "staging/returns/"
+                        : "staging/listings/";
+
+        String objectKey = stagingPrefix
                 + UUID.randomUUID().toString().replace("-", "")
                 + extension;
+
 
 
         // 4. Ghi file vào storage tạm.
@@ -194,7 +215,8 @@ public class MediaService {
         String uploadToken = signUploadTicket(
                 userId,
                 objectKey,
-                expiresAt
+                expiresAt,
+                purpose
         );
 
         // 6. Trả DTO.
@@ -213,13 +235,15 @@ public class MediaService {
     private String signUploadTicket(
             Long userId,
             String objectKey,
-            Instant expiresAt
+            Instant expiresAt,
+            String purpose
     ) {
+
         String payload = String.join(
                 "|",
                 "v1",
                 userId.toString(),
-                "LISTING_IMAGE",
+                purpose,
                 objectKey,
                 Long.toString(expiresAt.getEpochSecond())
         );
@@ -391,6 +415,187 @@ public class MediaService {
             );
         }
     }
+
+
+    public record ReturnEvidenceTicket(
+            String sourceKey,
+            String destinationKey
+    ) {}
+
+
+    public ReturnEvidenceTicket validateReturnEvidenceTicket(
+            String token,
+            Long userId,
+            Long orderId,
+            boolean checkStorage
+    ) {
+        try {
+            if (token == null || token.isBlank()
+                    || orderId == null || orderId <= 0) {
+                throw new BusinessException(
+                        ErrorCode.INVALID_RETURN_EVIDENCE
+                );
+            }
+
+            String[] segments = token.split("\\.", -1);
+
+            if (segments.length != 2) {
+                throw new BusinessException(
+                        ErrorCode.INVALID_RETURN_EVIDENCE
+                );
+            }
+
+            Base64.Decoder decoder = Base64.getUrlDecoder();
+
+            byte[] payloadBytes = decoder.decode(segments[0]);
+            byte[] signature = decoder.decode(segments[1]);
+
+            Mac mac = Mac.getInstance("HmacSHA256");
+            mac.init(new SecretKeySpec(
+                    ticketKey,
+                    "HmacSHA256"
+            ));
+
+            if (!MessageDigest.isEqual(
+                    mac.doFinal(payloadBytes),
+                    signature
+            )) {
+                throw new BusinessException(
+                        ErrorCode.INVALID_RETURN_EVIDENCE
+                );
+            }
+
+            String[] parts = new String(
+                    payloadBytes,
+                    StandardCharsets.UTF_8
+            ).split("\\|", -1);
+
+            if (parts.length != 5
+                    || !"v1".equals(parts[0])
+                    || !userId.toString().equals(parts[1])
+                    || !"RETURN_EVIDENCE".equals(parts[2])) {
+                throw new BusinessException(
+                        ErrorCode.INVALID_RETURN_EVIDENCE
+                );
+            }
+
+            String sourceKey = parts[3];
+
+            if (!sourceKey.matches(
+                    "staging/returns/[a-f0-9]{32}\\.(jpg|png|webp)"
+            )) {
+                throw new BusinessException(
+                        ErrorCode.INVALID_RETURN_EVIDENCE
+                );
+            }
+
+            long expiresAt = Long.parseLong(parts[4]);
+
+            if (checkStorage) {
+                if (Instant.now().getEpochSecond() >= expiresAt) {
+                    throw new BusinessException(
+                            ErrorCode.UPLOAD_TOKEN_EXPIRED
+                    );
+                }
+
+                HeadObjectResponse head = s3Client.headObject(
+                        HeadObjectRequest.builder()
+                                .bucket(r2Bucket)
+                                .key(sourceKey)
+                                .build()
+                );
+
+                Long bytes = head.contentLength();
+                String mime = head.contentType();
+
+                if (bytes == null || bytes <= 0
+                        || bytes > MAX_BYTES
+                        || !(
+                        "image/jpeg".equals(mime)
+                                || "image/png".equals(mime)
+                                || "image/webp".equals(mime)
+                )) {
+                    throw new BusinessException(
+                            ErrorCode.INVALID_RETURN_EVIDENCE
+                    );
+                }
+            }
+
+            String filename = sourceKey.substring(
+                    "staging/returns/".length()
+            );
+
+            return new ReturnEvidenceTicket(
+                    sourceKey,
+                    "returns/" + orderId + "/" + filename
+            );
+
+        } catch (BusinessException ex) {
+            throw ex;
+
+        } catch (S3Exception ex) {
+            if (ex.statusCode() == 404) {
+                throw new BusinessException(
+                        ErrorCode.INVALID_RETURN_EVIDENCE
+                );
+            }
+            throw new BusinessException(
+                    ErrorCode.MEDIA_STORAGE_UNAVAILABLE
+            );
+
+        } catch (SdkException ex) {
+            throw new BusinessException(
+                    ErrorCode.MEDIA_STORAGE_UNAVAILABLE
+            );
+
+        } catch (GeneralSecurityException
+                 | IllegalArgumentException ex) {
+            throw new BusinessException(
+                    ErrorCode.INVALID_RETURN_EVIDENCE
+            );
+        }
+    }
+
+
+    public void promoteReturnEvidence(
+            ReturnEvidenceTicket ticket
+    ) {
+        promoteListingImage(
+                new ListingTicket(
+                        ticket.sourceKey(),
+                        ticket.destinationKey()
+                )
+        );
+    }
+
+    public String presignReturnEvidenceUrl(
+            String storedKey
+    ) {
+        if (storedKey == null
+                || !storedKey.matches(
+                "returns/[0-9]+/[a-f0-9]{32}\\.(jpg|png|webp)"
+        )) {
+            throw new BusinessException(
+                    ErrorCode.INVALID_RETURN_EVIDENCE
+            );
+        }
+
+        GetObjectPresignRequest request =
+                GetObjectPresignRequest.builder()
+                        .signatureDuration(Duration.ofMinutes(15))
+                        .getObjectRequest(
+                                GetObjectRequest.builder()
+                                        .bucket(r2Bucket)
+                                        .key(storedKey)
+                                        .build()
+                        )
+                        .build();
+
+        return s3Presigner.presignGetObject(request)
+                .url()
+                .toString();
+    }
+
 
     public void promoteListingImage(ListingTicket ticket) {
 

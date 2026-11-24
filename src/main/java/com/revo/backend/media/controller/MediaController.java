@@ -20,6 +20,7 @@ public class MediaController {
         this.mediaService = mediaService;
     }
 
+
     @PostMapping(
             value = "/images",
             consumes = MediaType.MULTIPART_FORM_DATA_VALUE
@@ -27,10 +28,13 @@ public class MediaController {
     @ResponseStatus(HttpStatus.CREATED)
     public MediaUploadResponse upload(
             @RequestPart("file") MultipartFile file,
+            @RequestParam(defaultValue = "LISTING_IMAGE")
+            String purpose,
             @AuthenticationPrincipal Jwt jwt
     ) {
         Long userId = Long.parseLong(jwt.getSubject());
 
-        return mediaService.upload(userId, file);
+        return mediaService.upload(userId, file, purpose);
     }
+
 }

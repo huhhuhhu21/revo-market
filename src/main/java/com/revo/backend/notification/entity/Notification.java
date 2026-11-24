@@ -103,4 +103,24 @@ public class Notification {
         return notification;
     }
 
+
+    public static Notification returnRequestReceived(
+            User recipient,
+            Long returnId,
+            boolean isAdmin
+    ) {
+        Notification notification = new Notification();
+
+        notification.user = recipient;
+        notification.type = "RETURN_REQUEST_RECEIVED";
+        notification.content = isAdmin
+                ? "Có yêu cầu trả hàng mới cần xử lý."
+                : "Người mua đã gửi yêu cầu trả hàng.";
+
+        notification.refType = "RETURN_REQUEST";
+        notification.refId = returnId;
+
+        return notification;
+    }
+
 }

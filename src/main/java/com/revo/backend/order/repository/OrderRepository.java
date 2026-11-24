@@ -345,4 +345,43 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
             @Param("now") LocalDateTime now
     );
 
+    @Query(value = """
+    SELECT COUNT(*)
+    FROM order_exceptions
+    WHERE order_id = :orderId
+      AND status = 'PENDING'
+      AND exception_type IN ('DELIVERY', 'COD_ORDER')
+    """, nativeQuery = true)
+    long countBlockingReturnExceptions(
+            @Param("orderId") Long orderId
+    );
+
+    @Modifying(flushAutomatically = true)
+    @Query(value = """
+    UPDATE orders
+    SET shipping_history = JSON_ARRAY_APPEND(
+        shipping_history,
+        '$',
+        JSON_OBJECT(
+            'event_type', 'RETURN_REQUESTED',
+            'actual_at', :isoAt,
+            'recorded_at', :isoAt,
+            'actor_type', 'BUYER',
+            'actor_user_id', :buyerId,
+            'admin_id', NULL,
+            'return_request_id', :returnId,
+            'reason', NULL
+        )
+    ),
+    updated_at = :now
+    WHERE id = :orderId
+    """, nativeQuery = true)
+    int appendReturnRequestedEvent(
+            @Param("orderId") Long orderId,
+            @Param("returnId") Long returnId,
+            @Param("buyerId") Long buyerId,
+            @Param("isoAt") String isoAt,
+            @Param("now") LocalDateTime now
+    );
+
 }

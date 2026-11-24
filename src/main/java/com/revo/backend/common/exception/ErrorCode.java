@@ -417,8 +417,37 @@ public enum ErrorCode {
     DELIVERY_REQUIRES_EXCEPTION(
             HttpStatus.CONFLICT,
             "Giao hàng được ghi nhận quá muộn, cần ADMIN xử lý ngoại lệ."
-    );
+    ),
 
+    ONLY_BUYER_CAN_RETURN(
+            HttpStatus.FORBIDDEN,
+            "Chỉ người mua của đơn mới được yêu cầu trả hàng."
+    ),
+
+    RETURN_REQUEST_ALREADY_EXISTS(
+            HttpStatus.CONFLICT,
+            "Đơn hàng đã có yêu cầu trả hàng."
+    ),
+
+    ORDER_NOT_ELIGIBLE_FOR_RETURN(
+            HttpStatus.CONFLICT,
+            "Đơn hàng chưa đủ điều kiện trả hàng."
+    ),
+
+    ORDER_HAS_BLOCKING_EXCEPTION(
+            HttpStatus.CONFLICT,
+            "Đơn hàng có ngoại lệ chưa được giải quyết."
+    ),
+
+    RETURN_REQUEST_WINDOW_EXPIRED(
+            HttpStatus.UNPROCESSABLE_CONTENT,
+            "Đã quá thời hạn 48 giờ yêu cầu trả hàng."
+    ),
+
+    INVALID_RETURN_EVIDENCE(
+            HttpStatus.UNPROCESSABLE_CONTENT,
+            "Hình ảnh bằng chứng trả hàng không hợp lệ."
+    );
 
 
 
