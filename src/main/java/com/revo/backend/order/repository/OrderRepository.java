@@ -1,10 +1,14 @@
 package com.revo.backend.order.repository;
 
 import com.revo.backend.order.entity.Order;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+import java.time.LocalDateTime;
 import java.util.Optional;
 import com.revo.backend.order.entity.OrderStatus;
+import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -128,4 +132,75 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
     Optional<Long> findReturnRequestId(
             @Param("orderId") Long orderId
     );
+
+
+    @Query("""
+    SELECT o.listing.id
+    FROM Order o
+    WHERE o.id = :orderId
+    """)
+    Optional<Long> findListingIdByOrderId(
+            @Param("orderId") Long orderId
+    );
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("""
+    SELECT o
+    FROM Order o
+    WHERE o.id = :orderId
+    """)
+    Optional<Order> findByIdForUpdate(
+            @Param("orderId") Long orderId
+    );
+
+    @Query(value = """
+    SELECT jt.recorded_at, jt.reason
+    FROM orders o
+    JOIN JSON_TABLE(
+        o.shipping_history,
+        '$[*]'
+        COLUMNS (
+            seq_no FOR ORDINALITY,
+            event_type VARCHAR(64) PATH '$.event_type',
+            recorded_at VARCHAR(48) PATH '$.recorded_at',
+            reason VARCHAR(2000) PATH '$.reason'
+        )
+    ) AS jt
+    WHERE o.id = :orderId
+      AND jt.event_type = 'CANCEL_REQUESTED'
+    ORDER BY jt.seq_no DESC
+    """, nativeQuery = true)
+    List<Object[]> findCancellationRequests(
+            @Param("orderId") Long orderId
+    );
+
+    @Modifying(flushAutomatically = true)
+    @Query(value = """
+    UPDATE orders
+    SET shipping_history = JSON_ARRAY_APPEND(
+            shipping_history,
+            '$',
+            JSON_OBJECT(
+                'event_type', :eventType,
+                'actual_at', :isoAt,
+                'recorded_at', :isoAt,
+                'actor_type', :actorType,
+                'actor_user_id', :actorUserId,
+                'admin_id', NULL,
+                'reason', :reason
+            )
+        ),
+        updated_at = :now
+    WHERE id = :orderId
+    """, nativeQuery = true)
+    int appendShippingEvent(
+            @Param("orderId") Long orderId,
+            @Param("eventType") String eventType,
+            @Param("isoAt") String isoAt,
+            @Param("actorType") String actorType,
+            @Param("actorUserId") Long actorUserId,
+            @Param("reason") String reason,
+            @Param("now") LocalDateTime now
+    );
+
 }

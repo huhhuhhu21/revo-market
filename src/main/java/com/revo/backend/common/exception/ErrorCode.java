@@ -347,6 +347,22 @@ public enum ErrorCode {
     ),
 
 
+    ORDER_NOT_CANCELLABLE(
+            HttpStatus.CONFLICT,
+            "Trạng thái đơn hàng không cho phép hủy."
+    ),
+
+    SELLER_CANNOT_CANCEL_IN_TRANSIT(
+            HttpStatus.FORBIDDEN,
+            "Người bán không thể hủy đơn đang vận chuyển."
+    ),
+
+    CANCELLATION_ALREADY_PENDING(
+            HttpStatus.CONFLICT,
+            "Đã có yêu cầu hủy với lý do khác đang chờ xử lý."
+    ),
+
+
     INVALID_STATUS_FILTER(
             HttpStatus.BAD_REQUEST,
             "Trạng thái lọc không hợp lệ."

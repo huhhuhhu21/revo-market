@@ -236,4 +236,27 @@ public class Order {
     public String getDeliveryWard() {
         return deliveryWard;
     }
+
+
+    public void cancelBeforePickup(
+            User actor,
+            String reason,
+            LocalDateTime now
+    ) {
+        if (status != OrderStatus.PENDING_PICKUP
+                || pickedUpAt != null
+                || codStatus != CodStatus.NOT_COLLECTED) {
+            throw new IllegalStateException(
+                    "Order cannot be canceled before pickup"
+            );
+        }
+
+        this.status = OrderStatus.CANCELED;
+        this.codStatus = CodStatus.NO_COLLECTION;
+        this.canceledBy = actor;
+        this.cancelReason = reason;
+        this.canceledAt = now;
+        this.updatedAt = now;
+    }
+
 }

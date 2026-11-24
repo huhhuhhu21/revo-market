@@ -26,14 +26,40 @@ import com.revo.backend.order.dto.OrderDetailResponse;
 
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeParseException;
+
+import com.revo.backend.listing.repository.ListingRepository;
+import com.revo.backend.notification.entity.Notification;
+import com.revo.backend.notification.repository.NotificationRepository;
+import com.revo.backend.order.dto.CancelPendingResponse;
+
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
+
+import java.time.temporal.ChronoUnit;
+import java.util.Objects;
+
 @Service
 public class OrderService {
 
     private final OrderRepository orderRepository;
 
-    public OrderService(OrderRepository orderRepository) {
+
+    private final ListingRepository listingRepository;
+    private final NotificationRepository notificationRepository;
+
+    @PersistenceContext
+    private EntityManager entityManager;
+
+    public OrderService(
+            OrderRepository orderRepository,
+            ListingRepository listingRepository,
+            NotificationRepository notificationRepository
+    ) {
         this.orderRepository = orderRepository;
+        this.listingRepository = listingRepository;
+        this.notificationRepository = notificationRepository;
     }
+
 
     private record OrderUiConditions(
             boolean activeReturn,
@@ -593,4 +619,251 @@ public class OrderService {
             );
         }
     }
+
+    public record CancelResult(
+            OrderDetailResponse detail,
+            CancelPendingResponse pending
+    ) {}
+
+
+    @Transactional
+    public CancelResult cancelOrder(
+            Long currentUserId,
+            String rawOrderId,
+            String rawReason
+    ) {
+        // 1. Kiểm tra dữ liệu đầu vào.
+        Long orderId = parseOrderId(rawOrderId);
+
+        if (rawReason == null) {
+            throw new BusinessException(
+                    ErrorCode.VALIDATION_ERROR
+            );
+        }
+
+        String reason = rawReason.trim();
+
+        if (reason.isEmpty() || reason.length() > 2000) {
+            throw new BusinessException(
+                    ErrorCode.VALIDATION_ERROR
+            );
+        }
+
+        // 2. Lấy listingId trước để khóa đúng thứ tự.
+        Long listingId = orderRepository
+                .findListingIdByOrderId(orderId)
+                .orElseThrow(() -> new BusinessException(
+                        ErrorCode.ORDER_NOT_FOUND
+                ));
+
+        ProductListing listing = listingRepository
+                .findByIdForUpdate(listingId)
+                .orElseThrow(() -> new BusinessException(
+                        ErrorCode.ORDER_NOT_FOUND
+                ));
+
+        // 3. Khóa bản ghi đơn hàng.
+        Order order = orderRepository
+                .findByIdForUpdate(orderId)
+                .orElseThrow(() -> new BusinessException(
+                        ErrorCode.ORDER_NOT_FOUND
+                ));
+
+        // 4. Kiểm tra người tham gia.
+        boolean isBuyer = order.getBuyer().getId()
+                .equals(currentUserId);
+
+        boolean isSeller = order.getSeller().getId()
+                .equals(currentUserId);
+
+        if (!isBuyer && !isSeller) {
+            // Tránh tiết lộ đơn hàng của người khác.
+            throw new BusinessException(
+                    ErrorCode.ORDER_NOT_FOUND
+            );
+        }
+
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC)
+                .truncatedTo(ChronoUnit.MILLIS);
+
+        String actorType = isBuyer ? "BUYER" : "SELLER";
+        User actor = isBuyer
+                ? order.getBuyer()
+                : order.getSeller();
+
+        // 5. Nhánh A: Chưa bàn giao hàng.
+        if (order.getStatus() == OrderStatus.PENDING_PICKUP) {
+
+            if (now.isAfter(order.getCreatedAt().plusHours(48))
+                    || order.getPickedUpAt() != null
+                    || order.getCodStatus()
+                    != CodStatus.NOT_COLLECTED) {
+                throw new BusinessException(
+                        ErrorCode.ORDER_NOT_CANCELLABLE
+                );
+            }
+
+            // Trạng thái bài phải nhất quán với đơn đang hoạt động.
+            if (listing.getStatus()
+                    != ListingStatus.IN_TRANSACTION) {
+                throw new BusinessException(
+                        ErrorCode.ORDER_NOT_CANCELLABLE
+                );
+            }
+
+            // Đơn không còn chiếm sản phẩm.
+            order.cancelBeforePickup(actor, reason, now);
+            listing.releaseAfterCancellation();
+
+            orderRepository.saveAndFlush(order);
+            listingRepository.saveAndFlush(listing);
+
+            appendCancelEvent(
+                    orderId,
+                    "ORDER_CANCELED",
+                    actorType,
+                    currentUserId,
+                    reason,
+                    now
+            );
+
+            User recipient = isBuyer
+                    ? order.getSeller()
+                    : order.getBuyer();
+
+            notificationRepository.save(
+                    Notification.orderCancellation(
+                            recipient,
+                            orderId,
+                            false
+                    )
+            );
+
+            entityManager.refresh(order);
+
+            return new CancelResult(
+                    getOrderDetail(currentUserId, rawOrderId),
+                    null
+            );
+        }
+
+        // 6. Nhánh B: Hàng đang vận chuyển.
+        if (order.getStatus() == OrderStatus.IN_TRANSIT) {
+
+            if (!isBuyer) {
+                throw new BusinessException(
+                        ErrorCode.SELLER_CANNOT_CANCEL_IN_TRANSIT
+                );
+            }
+
+            if (order.getPickedUpAt() == null
+                    || order.getCodStatus()
+                    != CodStatus.NOT_COLLECTED) {
+                throw new BusinessException(
+                        ErrorCode.ORDER_NOT_CANCELLABLE
+                );
+            }
+
+            // Retry: không tạo thêm CANCEL_REQUESTED.
+            List<Object[]> previous =
+                    orderRepository.findCancellationRequests(orderId);
+
+            if (!previous.isEmpty()) {
+                Object[] event = previous.get(0);
+
+                String previousReason = (String) event[1];
+
+                if (!Objects.equals(reason, previousReason)) {
+                    throw new BusinessException(
+                            ErrorCode.CANCELLATION_ALREADY_PENDING
+                    );
+                }
+
+                OffsetDateTime requestedAt =
+                        OffsetDateTime.parse(
+                                event[0].toString()
+                        );
+
+                return new CancelResult(
+                        null,
+                        pendingResponse(orderId, requestedAt)
+                );
+            }
+
+            // Ghi nhận yêu cầu, KHÔNG chuyển đơn sang CANCELED.
+            OffsetDateTime requestedAt =
+                    now.atOffset(ZoneOffset.UTC);
+
+            appendCancelEvent(
+                    orderId,
+                    "CANCEL_REQUESTED",
+                    "BUYER",
+                    currentUserId,
+                    reason,
+                    now
+            );
+
+            notificationRepository.save(
+                    Notification.orderCancellation(
+                            order.getSeller(),
+                            orderId,
+                            true
+                    )
+            );
+
+            return new CancelResult(
+                    null,
+                    pendingResponse(orderId, requestedAt)
+            );
+        }
+
+        // 7. Các trạng thái còn lại không thể hủy bằng C10.
+        throw new BusinessException(
+                ErrorCode.ORDER_NOT_CANCELLABLE
+        );
+    }
+
+    private void appendCancelEvent(
+            Long orderId,
+            String eventType,
+            String actorType,
+            Long actorId,
+            String reason,
+            LocalDateTime now
+    ) {
+        String isoAt = now.atOffset(ZoneOffset.UTC)
+                .toString();
+
+        int updated = orderRepository.appendShippingEvent(
+                orderId,
+                eventType,
+                isoAt,
+                actorType,
+                actorId,
+                reason,
+                now
+        );
+
+        if (updated != 1) {
+            throw new IllegalStateException(
+                    "Could not append order event: " + orderId
+            );
+        }
+    }
+
+    private CancelPendingResponse pendingResponse(
+            Long orderId,
+            OffsetDateTime requestedAt
+    ) {
+        return new CancelPendingResponse(
+                orderId,
+                OrderStatus.IN_TRANSIT,
+                "RETURN_SHIPPING_PENDING",
+                requestedAt,
+                "Yêu cầu hủy đã được ghi nhận. "
+                        + "Đơn chỉ hủy khi hàng được chuyển về người bán."
+        );
+    }
+
+
 }

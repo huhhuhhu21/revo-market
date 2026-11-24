@@ -200,4 +200,17 @@ public class ProductListing {
         this.hiddenReasonType = null;
     }
 
+
+    public void releaseAfterCancellation() {
+        if (this.status != ListingStatus.IN_TRANSACTION) {
+            throw new IllegalStateException(
+                    "Listing is not in transaction"
+            );
+        }
+
+        this.status = ListingStatus.AVAILABLE;
+        this.hiddenReasonType = null;
+    }
+
+
 }

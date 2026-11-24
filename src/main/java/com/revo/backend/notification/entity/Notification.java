@@ -61,4 +61,29 @@ public class Notification {
 
         return notification;
     }
+
+
+    public static Notification orderCancellation(
+            User recipient,
+            Long orderId,
+            boolean pending
+    ) {
+        Notification notification = new Notification();
+
+        notification.user = recipient;
+        notification.type = pending
+                ? "ORDER_CANCEL_REQUESTED"
+                : "ORDER_CANCELED";
+
+        notification.content = pending
+                ? "Người mua đã yêu cầu hủy đơn. "
+                + "Đang chờ chuyển hoàn."
+                : "Đơn hàng đã được hủy.";
+
+        notification.refType = "ORDER";
+        notification.refId = orderId;
+
+        return notification;
+    }
+
 }
