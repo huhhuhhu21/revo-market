@@ -231,5 +231,34 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
             Pageable pageable
     );
 
+    @Modifying(flushAutomatically = true)
+    @Query(value = """
+    UPDATE orders
+    SET shipping_history = JSON_ARRAY_APPEND(
+        shipping_history,
+        '$',
+        JSON_OBJECT(
+            'event_type', 'PICKED_UP',
+            'actual_at', :actualAt,
+            'recorded_at', :recordedAt,
+            'actor_type', 'ADMIN',
+            'admin_id', :adminId,
+            'actor_user_id', NULL,
+            'reason', NULL,
+            'note', :note
+        )
+    ),
+    updated_at = :now
+    WHERE id = :orderId
+    """, nativeQuery = true)
+    int appendAdminPickupEvent(
+            @Param("orderId") Long orderId,
+            @Param("actualAt") String actualAt,
+            @Param("recordedAt") String recordedAt,
+            @Param("adminId") Long adminId,
+            @Param("note") String note,
+            @Param("now") LocalDateTime now
+    );
+
 
 }

@@ -259,4 +259,26 @@ public class Order {
         this.updatedAt = now;
     }
 
+
+    public void recordPickedUp(
+            LocalDateTime actualAt,
+            LocalDateTime recordedAt
+    ) {
+        if (status != OrderStatus.PENDING_PICKUP
+                || pickedUpAt != null
+                || codStatus != CodStatus.NOT_COLLECTED) {
+            throw new IllegalStateException(
+                    "Order is not ready for pickup"
+            );
+        }
+
+        this.pickedUpAt = actualAt;
+        this.status = OrderStatus.IN_TRANSIT;
+        this.updatedAt = recordedAt;
+
+        // COD chưa được thu tại bước tiếp nhận.
+        // Không thay đổi codStatus hoặc codAmount.
+    }
+
+
 }

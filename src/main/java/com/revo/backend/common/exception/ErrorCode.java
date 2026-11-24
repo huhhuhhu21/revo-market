@@ -366,7 +366,28 @@ public enum ErrorCode {
     INVALID_STATUS_FILTER(
             HttpStatus.BAD_REQUEST,
             "Trạng thái lọc không hợp lệ."
+    ),
+
+    ORDER_NOT_READY_FOR_PICKUP(
+            HttpStatus.CONFLICT,
+            "Đơn hàng không ở trạng thái chờ tiếp nhận hợp lệ."
+    ),
+
+    PICKUP_ALREADY_RECORDED(
+            HttpStatus.CONFLICT,
+            "Đơn hàng đã ghi nhận thời điểm tiếp nhận khác."
+    ),
+
+    PICKUP_TIME_INVALID(
+            HttpStatus.UNPROCESSABLE_CONTENT,
+            "Thời điểm tiếp nhận không hợp lệ."
+    ),
+
+    PICKUP_DEADLINE_EXPIRED(
+            HttpStatus.CONFLICT,
+            "Thời điểm tiếp nhận vượt quá hạn 48 giờ."
     );
+
 
 
 
