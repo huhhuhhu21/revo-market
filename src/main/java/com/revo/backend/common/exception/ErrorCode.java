@@ -386,7 +386,39 @@ public enum ErrorCode {
     PICKUP_DEADLINE_EXPIRED(
             HttpStatus.CONFLICT,
             "Thời điểm tiếp nhận vượt quá hạn 48 giờ."
+    ),
+
+
+    ORDER_NOT_READY_FOR_DELIVERY(
+            HttpStatus.CONFLICT,
+            "Đơn hàng chưa đủ điều kiện xác nhận giao."
+    ),
+
+    DELIVERY_TIME_INVALID(
+            HttpStatus.UNPROCESSABLE_CONTENT,
+            "Thời điểm giao hàng không hợp lệ."
+    ),
+
+    DELIVERY_ALREADY_RECORDED(
+            HttpStatus.CONFLICT,
+            "Đơn hàng đã ghi nhận thời điểm giao khác."
+    ),
+
+    DELIVERY_HAS_PENDING_CANCELLATION(
+            HttpStatus.CONFLICT,
+            "Đơn hàng đang có yêu cầu hủy chờ chuyển hoàn."
+    ),
+
+    DELIVERY_HAS_BLOCKING_EXCEPTION(
+            HttpStatus.CONFLICT,
+            "Đơn hàng có ngoại lệ chưa được giải quyết."
+    ),
+
+    DELIVERY_REQUIRES_EXCEPTION(
+            HttpStatus.CONFLICT,
+            "Giao hàng được ghi nhận quá muộn, cần ADMIN xử lý ngoại lệ."
     );
+
 
 
 

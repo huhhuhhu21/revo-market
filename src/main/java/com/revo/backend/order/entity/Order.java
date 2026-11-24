@@ -280,5 +280,28 @@ public class Order {
         // Không thay đổi codStatus hoặc codAmount.
     }
 
+    public void recordDelivered(
+            LocalDateTime actualAt,
+            LocalDateTime recordedAt
+    ) {
+        if (status != OrderStatus.IN_TRANSIT
+                || pickedUpAt == null
+                || deliveredAt != null
+                || codStatus != CodStatus.NOT_COLLECTED
+                || codCollectedAt != null) {
+            throw new IllegalStateException(
+                    "Order is not ready for delivery"
+            );
+        }
+
+        this.deliveredAt = actualAt;
+        this.codCollectedAt = recordedAt;
+        this.status = OrderStatus.DELIVERED;
+        this.codStatus = CodStatus.HELD;
+        this.updatedAt = recordedAt;
+
+        // Giữ nguyên codAmount và transactionPrice.
+    }
+
 
 }

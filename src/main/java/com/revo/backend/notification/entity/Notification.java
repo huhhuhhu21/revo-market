@@ -86,4 +86,21 @@ public class Notification {
         return notification;
     }
 
+    public static Notification orderDelivered(
+            User recipient,
+            Long orderId
+    ) {
+        Notification notification = new Notification();
+
+        notification.user = recipient;
+        notification.type = "ORDER_DELIVERED";
+        notification.content =
+                "Đơn hàng đã được giao thành công.";
+
+        notification.refType = "ORDER";
+        notification.refId = orderId;
+
+        return notification;
+    }
+
 }

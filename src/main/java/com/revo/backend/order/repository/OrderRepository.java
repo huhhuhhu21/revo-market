@@ -261,4 +261,88 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
     );
 
 
+    @Query(value = """
+    SELECT jt.actual_at, jt.exception_id
+    FROM orders o
+    JOIN JSON_TABLE(
+        o.shipping_history,
+        '$[*]'
+        COLUMNS (
+            seq_no FOR ORDINALITY,
+            event_type VARCHAR(64)
+                PATH '$.event_type',
+            actual_at VARCHAR(48)
+                PATH '$.actual_at',
+            exception_id BIGINT
+                PATH '$.exception_id'
+        )
+    ) jt
+    WHERE o.id = :orderId
+      AND jt.event_type = 'DELIVERY_REPORTED_LATE'
+    ORDER BY jt.seq_no DESC
+    LIMIT 1
+    """, nativeQuery = true)
+    List<Object[]> findLateDeliveryReports(
+            @Param("orderId") Long orderId
+    );
+
+    @Modifying(flushAutomatically = true)
+    @Query(value = """
+    UPDATE orders
+    SET shipping_history = JSON_ARRAY_APPEND(
+        shipping_history,
+        '$',
+        JSON_OBJECT(
+            'event_type', 'DELIVERED',
+            'actual_at', :actualAt,
+            'recorded_at', :recordedAt,
+            'actor_type', 'ADMIN',
+            'admin_id', :adminId,
+            'actor_user_id', NULL,
+            'reason', NULL,
+            'note', :note
+        )
+    ),
+    updated_at = :now
+    WHERE id = :orderId
+    """, nativeQuery = true)
+    int appendAdminDeliveryEvent(
+            @Param("orderId") Long orderId,
+            @Param("actualAt") String actualAt,
+            @Param("recordedAt") String recordedAt,
+            @Param("adminId") Long adminId,
+            @Param("note") String note,
+            @Param("now") LocalDateTime now
+    );
+
+    @Modifying(flushAutomatically = true)
+    @Query(value = """
+    UPDATE orders
+    SET shipping_history = JSON_ARRAY_APPEND(
+        shipping_history,
+        '$',
+        JSON_OBJECT(
+            'event_type', 'DELIVERY_REPORTED_LATE',
+            'actual_at', :actualAt,
+            'recorded_at', :recordedAt,
+            'actor_type', 'ADMIN',
+            'admin_id', :adminId,
+            'actor_user_id', NULL,
+            'exception_id', :exceptionId,
+            'note', :note
+        )
+    ),
+    updated_at = :now
+    WHERE id = :orderId
+    """, nativeQuery = true)
+    int appendLateDeliveryReportEvent(
+            @Param("orderId") Long orderId,
+            @Param("actualAt") String actualAt,
+            @Param("recordedAt") String recordedAt,
+            @Param("adminId") Long adminId,
+            @Param("exceptionId") Long exceptionId,
+            @Param("note") String note,
+            @Param("now") LocalDateTime now
+    );
+
 }
