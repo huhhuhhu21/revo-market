@@ -35,7 +35,8 @@ import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
-
+import com.revo.backend.order.dto.ReturnRequestLookupResponse;
+import com.revo.backend.order.entity.ReturnStatus;
 @Service
 public class ReturnRequestService {
 
@@ -351,14 +352,51 @@ public class ReturnRequestService {
         return tickets;
     }
 
+
     private ReturnRequestResponse buildResponse(
             ReturnRequest returnRequest
     ) {
+        // D01 luôn trả response cho USER.
+        return buildResponse(returnRequest, false);
+    }
+
+    private ReturnRequestResponse buildResponse(
+            ReturnRequest returnRequest,
+            boolean isAdmin
+    ) {
+        // Chỉ tạo URL ảnh sau khi đã kiểm tra quyền.
         List<String> imageUrls =
                 returnRequest.getEvidenceImages()
                         .stream()
                         .map(mediaService::presignReturnEvidenceUrl)
                         .toList();
+
+        ReturnStatus status = returnRequest.getStatus();
+
+        // Các cờ này là gợi ý cho giao diện ADMIN.
+        // API D08-D11 vẫn phải tự kiểm tra điều kiện.
+        boolean canApprove =
+                isAdmin && status == ReturnStatus.PENDING;
+
+        boolean canReject =
+                isAdmin && status == ReturnStatus.PENDING;
+
+        boolean canRecordHandover =
+                isAdmin
+                        && status == ReturnStatus.AWAITING_HANDOVER
+                        && returnRequest.getReturnDeadline() != null
+                        && !LocalDateTime.now(ZoneOffset.UTC).isAfter(
+                        returnRequest.getReturnDeadline()
+                );
+
+        boolean canRecordReceipt =
+                isAdmin && status == ReturnStatus.RETURNING;
+
+        // ID ADMIN xử lý chỉ trả cho ADMIN.
+        Long processedBy =
+                isAdmin && returnRequest.getProcessedBy() != null
+                        ? returnRequest.getProcessedBy().getId()
+                        : null;
 
         return new ReturnRequestResponse(
                 returnRequest.getId(),
@@ -366,22 +404,21 @@ public class ReturnRequestService {
                 returnRequest.getBuyer().getId(),
                 returnRequest.getReason(),
                 imageUrls,
-                returnRequest.getStatus(),
+                status,
                 utc(returnRequest.getCreatedAt()),
-                returnRequest.getProcessedBy() == null
-                        ? null
-                        : returnRequest.getProcessedBy().getId(),
+                processedBy,
                 utc(returnRequest.getProcessedAt()),
                 returnRequest.getAdminReason(),
                 utc(returnRequest.getReturnDeadline()),
                 utc(returnRequest.getHandedOverAt()),
                 utc(returnRequest.getReturnedAt()),
-                false,
-                false,
-                false,
-                false
+                canApprove,
+                canReject,
+                canRecordHandover,
+                canRecordReceipt
         );
     }
+
 
     private static Long parseOrderId(String raw) {
         if (raw == null || !raw.matches("[0-9]+")) {
@@ -412,4 +449,65 @@ public class ReturnRequestService {
                 ? null
                 : value.atOffset(ZoneOffset.UTC);
     }
+
+
+    @Transactional(readOnly = true)
+    public ReturnRequestLookupResponse getForOrder(
+            Long currentUserId,
+            String rawOrderId
+    ) {
+        // 1. Kiểm tra mã đơn.
+        Long orderId = parseOrderId(rawOrderId);
+
+        // 2. Tìm đơn hàng.
+        Order order = orderRepository.findById(orderId)
+                .orElseThrow(() -> new BusinessException(
+                        ErrorCode.ORDER_NOT_FOUND
+                ));
+
+        // 3. Kiểm tra tài khoản đang đăng nhập.
+        User currentUser = userRepository.findById(currentUserId)
+                .orElseThrow(() -> new BusinessException(
+                        ErrorCode.ORDER_NOT_FOUND
+                ));
+
+        // 4. ADMIN phải đang ACTIVE.
+        boolean isAdmin =
+                currentUser.getRole() == User.Role.ADMIN
+                        && currentUser.getStatus() == User.Status.ACTIVE;
+
+        // 5. Kiểm tra người mua hoặc người bán.
+        // USER bị RESTRICTED vẫn được xem đơn cũ.
+        boolean isParticipant =
+                currentUser.getRole() == User.Role.USER
+                        && (
+                        order.getBuyer().getId()
+                                .equals(currentUserId)
+                                || order.getSeller().getId()
+                                .equals(currentUserId)
+                );
+
+        // 6. Người không có quyền nhận 404.
+        if (!isAdmin && !isParticipant) {
+            throw new BusinessException(
+                    ErrorCode.ORDER_NOT_FOUND
+            );
+        }
+
+        // 7. Tìm yêu cầu trả hàng.
+        ReturnRequest returnRequest =
+                returnRepository.findByOrder_Id(orderId)
+                        .orElse(null);
+
+        // 8. Đơn chưa có yêu cầu trả hàng.
+        if (returnRequest == null) {
+            return new ReturnRequestLookupResponse(null);
+        }
+
+        // 9. Có yêu cầu: trả đầy đủ dữ liệu theo quyền.
+        return new ReturnRequestLookupResponse(
+                buildResponse(returnRequest, isAdmin)
+        );
+    }
+
 }

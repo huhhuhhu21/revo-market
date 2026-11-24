@@ -13,7 +13,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.*;
-
+import com.revo.backend.order.dto.ReturnRequestLookupResponse;
 @RestController
 @RequestMapping("/api/v1/orders")
 public class ReturnRequestController {
@@ -49,4 +49,23 @@ public class ReturnRequestController {
                 )
                 .body(result.response());
     }
+
+
+    @GetMapping("/{orderId}/returns")
+    public ResponseEntity<ReturnRequestLookupResponse> getReturn(
+            @PathVariable String orderId,
+            @AuthenticationPrincipal Jwt jwt
+    ) {
+        Long currentUserId =
+                Long.parseLong(jwt.getSubject());
+
+        ReturnRequestLookupResponse result =
+                returnRequestService.getForOrder(
+                        currentUserId,
+                        orderId
+                );
+
+        return ResponseEntity.ok(result);
+    }
+
 }
