@@ -447,7 +447,18 @@ public enum ErrorCode {
     INVALID_RETURN_EVIDENCE(
             HttpStatus.UNPROCESSABLE_CONTENT,
             "Hình ảnh bằng chứng trả hàng không hợp lệ."
+    ),
+
+    RETURN_REQUEST_NOT_FOUND(
+            HttpStatus.NOT_FOUND,
+            "Không tìm thấy yêu cầu trả hàng."
+    ),
+
+    RETURN_NOT_PENDING(
+            HttpStatus.CONFLICT,
+            "Yêu cầu trả hàng không còn ở trạng thái chờ xử lý."
     );
+
 
 
 

@@ -8,6 +8,10 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import java.util.Optional;
+import jakarta.persistence.LockModeType;
+import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 public interface ReturnRequestRepository
         extends JpaRepository<ReturnRequest, Long> {
@@ -46,6 +50,28 @@ public interface ReturnRequestRepository
             @Param("status") String status,
             @Param("orderId") Long orderId,
             Pageable pageable
+    );
+
+    // Tìm orderId của yêu cầu trả hàng.
+    // Chưa khóa dữ liệu tại bước này.
+    @Query("""
+    SELECT r.order.id
+    FROM ReturnRequest r
+    WHERE r.id = :returnId
+    """)
+    Optional<Long> findOrderIdByReturnId(
+            @Param("returnId") Long returnId
+    );
+
+    // Chỉ gọi sau khi đã khóa Order tương ứng.
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("""
+    SELECT r
+    FROM ReturnRequest r
+    WHERE r.id = :returnId
+    """)
+    Optional<ReturnRequest> findByIdForUpdate(
+            @Param("returnId") Long returnId
     );
 
 }

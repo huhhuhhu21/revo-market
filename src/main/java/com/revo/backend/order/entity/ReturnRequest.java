@@ -132,4 +132,24 @@ public class ReturnRequest {
     public LocalDateTime getReturnedAt() {
         return returnedAt;
     }
+
+
+    public void approve(
+            User admin,
+            String note,
+            LocalDateTime now
+    ) {
+        if (status != ReturnStatus.PENDING) {
+            throw new IllegalStateException(
+                    "Return request is not pending"
+            );
+        }
+
+        this.status = ReturnStatus.AWAITING_HANDOVER;
+        this.processedBy = admin;
+        this.processedAt = now;
+        this.returnDeadline = now.plusHours(48);
+        this.adminReason = note;
+    }
+
 }

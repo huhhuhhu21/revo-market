@@ -37,6 +37,12 @@ import java.util.HashSet;
 import java.util.List;
 import com.revo.backend.order.dto.ReturnRequestLookupResponse;
 import com.revo.backend.order.entity.ReturnStatus;
+
+import com.revo.backend.order.dto.ApproveReturnRequest;
+import com.revo.backend.order.entity.ReturnStatus;
+
+import java.util.Objects;
+
 @Service
 public class ReturnRequestService {
 
@@ -514,6 +520,175 @@ public class ReturnRequestService {
             ReturnRequest returnRequest
     ) {
         return buildResponse(returnRequest, true);
+    }
+
+    @Transactional
+    public ReturnRequestResponse approveReturn(
+            Long adminId,
+            String rawReturnId,
+            ApproveReturnRequest request
+    ) {
+        // 1. Kiểm tra returnId.
+        Long returnId = parseReturnId(rawReturnId);
+
+        // 2. Kiểm tra ADMIN theo dữ liệu mới nhất.
+        User admin = userRepository.findById(adminId)
+                .orElseThrow(() -> new BusinessException(
+                        ErrorCode.FORBIDDEN
+                ));
+
+        if (admin.getRole() != User.Role.ADMIN
+                || admin.getStatus() != User.Status.ACTIVE) {
+            throw new BusinessException(
+                    ErrorCode.FORBIDDEN
+            );
+        }
+
+        // 3. Chuẩn hóa ghi chú.
+        String note = request == null ? null : request.note();
+
+        if (note != null) {
+            note = note.trim();
+
+            if (note.isEmpty()) {
+                note = null;
+            }
+        }
+
+        // 4. Tìm orderId của yêu cầu.
+        Long orderId = returnRepository
+                .findOrderIdByReturnId(returnId)
+                .orElseThrow(() -> new BusinessException(
+                        ErrorCode.RETURN_REQUEST_NOT_FOUND
+                ));
+
+        // 5. Khóa Order trước để đồng bộ với D01
+        // và các thao tác thay đổi đơn hàng/COD.
+        Order order = orderRepository
+                .findByIdForUpdate(orderId)
+                .orElseThrow(() -> new BusinessException(
+                        ErrorCode.RETURN_REQUEST_NOT_FOUND
+                ));
+
+        // 6. Khóa yêu cầu trả hàng sau Order.
+        ReturnRequest returnRequest = returnRepository
+                .findByIdForUpdate(returnId)
+                .orElseThrow(() -> new BusinessException(
+                        ErrorCode.RETURN_REQUEST_NOT_FOUND
+                ));
+
+        // 7. Kiểm tra gửi lại cùng yêu cầu phê duyệt.
+        if (returnRequest.getStatus()
+                == ReturnStatus.AWAITING_HANDOVER) {
+
+            if (Objects.equals(
+                    returnRequest.getAdminReason(),
+                    note
+            )) {
+                // Retry: giữ nguyên thời điểm và deadline.
+                // Không ghi lịch sử hoặc thông báo mới.
+                return toAdminResponse(returnRequest);
+            }
+
+            throw new BusinessException(
+                    ErrorCode.RETURN_NOT_PENDING
+            );
+        }
+
+        // 8. Chỉ được duyệt yêu cầu PENDING.
+        if (returnRequest.getStatus()
+                != ReturnStatus.PENDING) {
+            throw new BusinessException(
+                    ErrorCode.RETURN_NOT_PENDING
+            );
+        }
+
+        // 9. Kiểm tra đơn hàng và COD.
+        boolean validOrderStatus =
+                order.getStatus() == OrderStatus.DELIVERED
+                        || order.getStatus() == OrderStatus.COMPLETED;
+
+        if (!validOrderStatus
+                || order.getCodStatus() != CodStatus.HELD
+                || order.getDeliveredAt() == null) {
+            throw new BusinessException(
+                    ErrorCode.ORDER_NOT_ELIGIBLE_FOR_RETURN
+            );
+        }
+
+        // Không kiểm tra now <= deliveredAt + 48h.
+        // Thời hạn đó đã được kiểm tra khi tạo D01.
+
+        // 10. Tạo thời điểm phê duyệt tại backend.
+        LocalDateTime now =
+                LocalDateTime.now(ZoneOffset.UTC)
+                        .truncatedTo(ChronoUnit.MILLIS);
+
+        // 11. Cập nhật ReturnRequest.
+        returnRequest.approve(admin, note, now);
+
+        returnRepository.saveAndFlush(returnRequest);
+
+        // 12. Ghi lịch sử phê duyệt.
+        String isoAt =
+                now.atOffset(ZoneOffset.UTC).toString();
+
+        int updated = orderRepository.appendReturnApprovedEvent(
+                orderId,
+                returnId,
+                adminId,
+                isoAt,
+                note,
+                now
+        );
+
+        if (updated != 1) {
+            throw new IllegalStateException(
+                    "Cannot append RETURN_APPROVED event"
+            );
+        }
+
+        // 13. Thông báo cho người mua và người bán.
+        notificationRepository.saveAll(
+                List.of(
+                        Notification.returnApproved(
+                                order.getBuyer(),
+                                returnId,
+                                true
+                        ),
+                        Notification.returnApproved(
+                                order.getSeller(),
+                                returnId,
+                                false
+                        )
+                )
+        );
+
+        // 14. Trả về DTO dành cho ADMIN.
+        return toAdminResponse(returnRequest);
+    }
+
+    private static Long parseReturnId(String raw) {
+        if (raw == null || !raw.matches("[0-9]+")) {
+            throw new BusinessException(
+                    ErrorCode.VALIDATION_ERROR
+            );
+        }
+
+        try {
+            long id = Long.parseLong(raw);
+
+            if (id > 0) {
+                return id;
+            }
+
+        } catch (NumberFormatException ignored) {
+            // Xử lý theo mã lỗi chung.
+        }
+
+        throw new BusinessException(
+                ErrorCode.VALIDATION_ERROR
+        );
     }
 
 }

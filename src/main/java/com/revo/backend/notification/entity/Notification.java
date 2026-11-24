@@ -123,4 +123,26 @@ public class Notification {
         return notification;
     }
 
+    public static Notification returnApproved(
+            User recipient,
+            Long returnId,
+            boolean isBuyer
+    ) {
+        Notification notification = new Notification();
+
+        notification.user = recipient;
+        notification.type = "RETURN_APPROVED";
+
+        notification.content = isBuyer
+                ? "Yêu cầu trả hàng đã được phê duyệt. "
+                + "Vui lòng bàn giao hàng trong 48 giờ."
+                : "Yêu cầu trả hàng của đơn hàng "
+                + "đã được ADMIN phê duyệt.";
+
+        notification.refType = "RETURN_REQUEST";
+        notification.refId = returnId;
+
+        return notification;
+    }
+
 }

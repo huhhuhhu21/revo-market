@@ -384,4 +384,33 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
             @Param("now") LocalDateTime now
     );
 
+    @Modifying(flushAutomatically = true)
+    @Query(value = """
+    UPDATE orders
+    SET shipping_history = JSON_ARRAY_APPEND(
+        shipping_history,
+        '$',
+        JSON_OBJECT(
+            'event_type', 'RETURN_APPROVED',
+            'actual_at', :isoAt,
+            'recorded_at', :isoAt,
+            'actor_type', 'ADMIN',
+            'admin_id', :adminId,
+            'actor_user_id', NULL,
+            'return_request_id', :returnId,
+            'note', :note
+        )
+    ),
+    updated_at = :now
+    WHERE id = :orderId
+    """, nativeQuery = true)
+    int appendReturnApprovedEvent(
+            @Param("orderId") Long orderId,
+            @Param("returnId") Long returnId,
+            @Param("adminId") Long adminId,
+            @Param("isoAt") String isoAt,
+            @Param("note") String note,
+            @Param("now") LocalDateTime now
+    );
+
 }
