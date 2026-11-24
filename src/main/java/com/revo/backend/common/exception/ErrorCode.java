@@ -477,7 +477,28 @@ public enum ErrorCode {
     RETURN_HANDOVER_REQUIRES_EXCEPTION(
             HttpStatus.CONFLICT,
             "Việc bàn giao cần được xử lý qua ngoại lệ."
+    ),
+
+    RETURN_NOT_RETURNING(
+            HttpStatus.CONFLICT,
+            "Yêu cầu trả hàng chưa ở trạng thái đang chuyển hoàn."
+    ),
+
+    RETURN_RECEIPT_TIME_INVALID(
+            HttpStatus.UNPROCESSABLE_CONTENT,
+            "Thời điểm người bán nhận hàng trả không hợp lệ."
+    ),
+
+    COD_ALREADY_SETTLED(
+            HttpStatus.CONFLICT,
+            "COD đã được quyết toán, không thể hoàn trực tiếp."
+    ),
+
+    RETURN_LISTING_STATE_INVALID(
+            HttpStatus.CONFLICT,
+            "Trạng thái bài đăng không phù hợp để hoàn tất trả hàng."
     );
+
 
 
 

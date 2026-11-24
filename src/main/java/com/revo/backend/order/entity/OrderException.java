@@ -91,4 +91,28 @@ public class OrderException {
         return exception;
     }
 
+    public static OrderException codAlreadySettled(
+            Order order,
+            User admin,
+            Long returnId,
+            LocalDateTime recordedAt
+    ) {
+        OrderException exception = new OrderException();
+
+        exception.order = order;
+        exception.createdBy = admin;
+        exception.exceptionType = "COD_ORDER";
+        exception.status = "PENDING";
+
+        exception.description =
+                "D11_COD_ALREADY_SETTLED"
+                        + " | Return ID: " + returnId
+                        + " | COD đã quyết toán, không thể hoàn lại "
+                        + "bằng luồng D11 thông thường.";
+
+        exception.createdAt = recordedAt;
+
+        return exception;
+    }
+
 }

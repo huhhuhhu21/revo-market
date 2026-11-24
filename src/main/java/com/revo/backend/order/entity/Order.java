@@ -304,4 +304,26 @@ public class Order {
     }
 
 
+    public void finishReturnAndRefund(LocalDateTime recordedAt) {
+        if ((status != OrderStatus.DELIVERED
+                && status != OrderStatus.COMPLETED)
+                || codStatus != CodStatus.HELD
+                || codCollectedAt == null
+                || codSettledAt != null
+                || codRefundedAt != null) {
+            throw new IllegalStateException(
+                    "Order is not eligible for COD refund"
+            );
+        }
+
+        this.status = OrderStatus.RETURNED;
+        this.codStatus = CodStatus.REFUNDED;
+        this.codRefundedAt = recordedAt;
+        this.updatedAt = recordedAt;
+
+        // Không thay đổi codAmount, transactionPrice.
+        // Không xóa thời điểm giao hàng hoặc hoàn thành cũ.
+    }
+
+
 }

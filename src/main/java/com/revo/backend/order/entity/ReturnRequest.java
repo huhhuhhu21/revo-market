@@ -169,4 +169,18 @@ public class ReturnRequest {
         // returnedAt chỉ được ghi khi D11 hoàn tất.
     }
 
+    public void completeReturn(LocalDateTime actualAt) {
+        if (status != ReturnStatus.RETURNING
+                || handedOverAt == null
+                || returnedAt != null
+                || actualAt.isBefore(handedOverAt)) {
+            throw new IllegalStateException(
+                    "Return request cannot be completed"
+            );
+        }
+
+        this.status = ReturnStatus.RETURNED;
+        this.returnedAt = actualAt;
+    }
+
 }

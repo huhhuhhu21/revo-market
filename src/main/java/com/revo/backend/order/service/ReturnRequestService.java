@@ -7,6 +7,7 @@ import com.revo.backend.auth.repository.UserRepository;
 import com.revo.backend.common.exception.BusinessException;
 import com.revo.backend.common.exception.ErrorCode;
 
+import com.revo.backend.listing.entity.ListingStatus;
 import com.revo.backend.media.service.MediaService;
 import com.revo.backend.media.service.MediaService.ReturnEvidenceTicket;
 
@@ -47,6 +48,12 @@ import com.revo.backend.order.repository.OrderExceptionRepository;
 
 import java.util.Objects;
 
+import com.revo.backend.listing.entity.ProductListing;
+import com.revo.backend.listing.repository.ListingRepository;
+
+import com.revo.backend.order.dto.AdminReturnReceiptRequest;
+import com.revo.backend.order.dto.AdminReturnReceiptResponse;
+
 import java.util.Objects;
 
 @Service
@@ -58,6 +65,7 @@ public class ReturnRequestService {
     private final NotificationRepository notificationRepository;
     private final MediaService mediaService;
     private final OrderExceptionRepository exceptionRepository;
+    private final ListingRepository listingRepository;
 
     public ReturnRequestService(
             OrderRepository orderRepository,
@@ -65,7 +73,8 @@ public class ReturnRequestService {
             UserRepository userRepository,
             NotificationRepository notificationRepository,
             MediaService mediaService,
-            OrderExceptionRepository exceptionRepository
+            OrderExceptionRepository exceptionRepository,
+            ListingRepository listingRepository
     ) {
         this.orderRepository = orderRepository;
         this.returnRepository = returnRepository;
@@ -73,6 +82,7 @@ public class ReturnRequestService {
         this.notificationRepository = notificationRepository;
         this.mediaService = mediaService;
         this.exceptionRepository = exceptionRepository;
+        this.listingRepository = listingRepository;
     }
 
     public record CreateResult(
@@ -82,6 +92,11 @@ public class ReturnRequestService {
 
     public record HandoverOutcome(
             ReturnRequestResponse response,
+            Long exceptionId
+    ) {}
+
+    public record ReceiptOutcome(
+            AdminReturnReceiptResponse response,
             Long exceptionId
     ) {}
 
@@ -1015,6 +1030,317 @@ public class ReturnRequestService {
         }
 
         return false;
+    }
+
+    @Transactional
+    public ReceiptOutcome recordReturnReceipt(
+            Long adminId,
+            String rawReturnId,
+            AdminReturnReceiptRequest request
+    ) {
+        // 1. Kiểm tra input.
+        Long returnId = parseReturnId(rawReturnId);
+
+        if (request == null || request.actualAt() == null) {
+            throw new BusinessException(
+                    ErrorCode.VALIDATION_ERROR
+            );
+        }
+
+        // 2. Kiểm tra ADMIN đang hoạt động.
+        User admin = userRepository.findById(adminId)
+                .orElseThrow(() -> new BusinessException(
+                        ErrorCode.FORBIDDEN
+                ));
+
+        if (admin.getRole() != User.Role.ADMIN
+                || admin.getStatus() != User.Status.ACTIVE) {
+            throw new BusinessException(
+                    ErrorCode.FORBIDDEN
+            );
+        }
+
+        // 3. Thời gian ghi nhận do backend tạo.
+        LocalDateTime recordedAt =
+                LocalDateTime.now(ZoneOffset.UTC)
+                        .truncatedTo(ChronoUnit.MILLIS);
+
+        LocalDateTime actualAt =
+                request.actualAt()
+                        .withOffsetSameInstant(ZoneOffset.UTC)
+                        .toLocalDateTime()
+                        .truncatedTo(ChronoUnit.MILLIS);
+
+        if (actualAt.isAfter(recordedAt)) {
+            throw new BusinessException(
+                    ErrorCode.VALIDATION_ERROR
+            );
+        }
+
+        // 4. Tra cứu Order ID từ ReturnRequest.
+        Long orderId = returnRepository
+                .findOrderIdByReturnId(returnId)
+                .orElseThrow(() -> new BusinessException(
+                        ErrorCode.RETURN_REQUEST_NOT_FOUND
+                ));
+
+        // 5. Khóa Order trước.
+        // Job quyết toán COD cũng phải sử dụng khóa này.
+        Order order = orderRepository
+                .findByIdForUpdate(orderId)
+                .orElseThrow(() -> new BusinessException(
+                        ErrorCode.ORDER_NOT_FOUND
+                ));
+
+        // 6. Khóa ReturnRequest sau Order.
+        ReturnRequest returnRequest = returnRepository
+                .findByIdForUpdate(returnId)
+                .orElseThrow(() -> new BusinessException(
+                        ErrorCode.RETURN_REQUEST_NOT_FOUND
+                ));
+
+        // 7. Retry khi đã hoàn tất trả hàng.
+        if (returnRequest.getStatus() == ReturnStatus.RETURNED) {
+
+            boolean sameReceipt = Objects.equals(
+                    returnRequest.getReturnedAt(),
+                    actualAt
+            );
+
+            boolean alreadyRefunded =
+                    order.getStatus() == OrderStatus.RETURNED
+                            && order.getCodStatus() == CodStatus.REFUNDED
+                            && order.getCodRefundedAt() != null;
+
+            if (sameReceipt && alreadyRefunded) {
+                // Không cập nhật returnedAt hay codRefundedAt.
+                // Không ghi lịch sử hoặc gửi thông báo.
+                return new ReceiptOutcome(
+                        buildReceiptResponse(
+                                returnRequest,
+                                order,
+                                order.getListing()
+                        ),
+                        null
+                );
+            }
+
+            throw new BusinessException(
+                    ErrorCode.RETURN_NOT_RETURNING
+            );
+        }
+
+        // 8. Chỉ yêu cầu RETURNING được tiếp tục.
+        if (returnRequest.getStatus() != ReturnStatus.RETURNING
+                || returnRequest.getHandedOverAt() == null
+                || returnRequest.getReturnedAt() != null) {
+            throw new BusinessException(
+                    ErrorCode.RETURN_NOT_RETURNING
+            );
+        }
+
+        // 9. Kiểm tra thời gian người bán nhận hàng.
+        if (actualAt.isBefore(
+                returnRequest.getHandedOverAt()
+        )) {
+            throw new BusinessException(
+                    ErrorCode.RETURN_RECEIPT_TIME_INVALID
+            );
+        }
+
+        // 10. Kiểm tra trạng thái đơn.
+        boolean validOrderStatus =
+                order.getStatus() == OrderStatus.DELIVERED
+                        || order.getStatus() == OrderStatus.COMPLETED;
+
+        if (!validOrderStatus || order.getDeliveredAt() == null) {
+            throw new BusinessException(
+                    ErrorCode.ORDER_NOT_ELIGIBLE_FOR_RETURN
+            );
+        }
+
+        // 11. COD đã SETTLED: phải tạo ngoại lệ,
+        // tuyệt đối không tự hoàn lần thứ hai.
+        if (order.getCodStatus() == CodStatus.SETTLED
+                || order.getCodSettledAt() != null) {
+
+            Long existingExceptionId = exceptionRepository
+                    .findExistingCodSettledException(orderId)
+                    .orElse(null);
+
+            if (existingExceptionId != null) {
+                return new ReceiptOutcome(
+                        null,
+                        existingExceptionId
+                );
+            }
+
+            OrderException exception =
+                    exceptionRepository.saveAndFlush(
+                            OrderException.codAlreadySettled(
+                                    order,
+                                    admin,
+                                    returnId,
+                                    recordedAt
+                            )
+                    );
+
+            String recordedIso =
+                    recordedAt.atOffset(ZoneOffset.UTC).toString();
+
+            int recorded =
+                    orderRepository.appendCodSettlementExceptionEvent(
+                            orderId,
+                            exception.getId(),
+                            adminId,
+                            recordedIso,
+                            recordedAt
+                    );
+
+            if (recorded != 1) {
+                throw new IllegalStateException(
+                        "Cannot record COD exception"
+                );
+            }
+
+            // Không đổi ReturnRequest / Order / Listing.
+            // Controller trả 409 sau khi transaction commit.
+            return new ReceiptOutcome(
+                    null,
+                    exception.getId()
+            );
+        }
+
+        // 12. COD phải đang giữ và đã được thu hợp lệ.
+        if (order.getCodStatus() != CodStatus.HELD
+                || order.getCodCollectedAt() == null
+                || order.getCodRefundedAt() != null) {
+            throw new BusinessException(
+                    ErrorCode.COD_NOT_HELD
+            );
+        }
+
+        // 13. Không hoàn COD khi có ngoại lệ PENDING.
+        if (orderRepository.countPendingOrderExceptions(
+                orderId
+        ) > 0) {
+            throw new BusinessException(
+                    ErrorCode.ORDER_HAS_BLOCKING_EXCEPTION
+            );
+        }
+
+        // 14. Khóa bài đăng trước khi thay đổi trạng thái.
+        ProductListing listing = listingRepository
+                .findByIdForUpdate(order.getListing().getId())
+                .orElseThrow(() -> new BusinessException(
+                        ErrorCode.LISTING_NOT_FOUND
+                ));
+
+        boolean validListing =
+                !listing.isDeleted()
+                        && (
+                        listing.getStatus()
+                                == ListingStatus.IN_TRANSACTION
+                                || listing.getStatus()
+                                == ListingStatus.SOLD
+                );
+
+        if (!validListing) {
+            throw new BusinessException(
+                    ErrorCode.RETURN_LISTING_STATE_INVALID
+            );
+        }
+
+        // 15. Chuẩn hóa ghi chú.
+        String note = request.note();
+
+        if (note != null) {
+            note = note.trim();
+
+            if (note.isEmpty()) {
+                note = null;
+            }
+        }
+
+        // 16. Cập nhật ba đối tượng trong cùng transaction.
+        returnRequest.completeReturn(actualAt);
+        order.finishReturnAndRefund(recordedAt);
+        listing.hideAfterSuccessfulReturn();
+
+        returnRepository.saveAndFlush(returnRequest);
+        orderRepository.saveAndFlush(order);
+        listingRepository.saveAndFlush(listing);
+
+        // 17. Ghi lịch sử.
+        String actualIso =
+                actualAt.atOffset(ZoneOffset.UTC).toString();
+
+        String recordedIso =
+                recordedAt.atOffset(ZoneOffset.UTC).toString();
+
+        int updated = orderRepository.appendReturnReceiptEvents(
+                orderId,
+                returnId,
+                adminId,
+                actualIso,
+                recordedIso,
+                order.getCodAmount(),
+                note,
+                recordedAt
+        );
+
+        if (updated != 1) {
+            throw new IllegalStateException(
+                    "Cannot append return receipt events"
+            );
+        }
+
+        // 18. Chỉ thông báo hoàn COD cho người mua.
+        notificationRepository.save(
+                Notification.codRefunded(
+                        order.getBuyer(),
+                        orderId
+                )
+        );
+
+        // 19. Trả dữ liệu đã cập nhật.
+        return new ReceiptOutcome(
+                buildReceiptResponse(
+                        returnRequest,
+                        order,
+                        listing
+                ),
+                null
+        );
+    }
+
+    private AdminReturnReceiptResponse buildReceiptResponse(
+            ReturnRequest returnRequest,
+            Order order,
+            ProductListing listing
+    ) {
+        return new AdminReturnReceiptResponse(
+                new AdminReturnReceiptResponse.ReturnInfo(
+                        returnRequest.getId(),
+                        order.getId(),
+                        returnRequest.getStatus(),
+                        utc(returnRequest.getReturnedAt())
+                ),
+
+                new AdminReturnReceiptResponse.OrderInfo(
+                        order.getId(),
+                        order.getStatus(),
+                        order.getCodStatus(),
+                        utc(order.getCodRefundedAt()),
+                        order.getCodAmount()
+                ),
+
+                new AdminReturnReceiptResponse.ListingInfo(
+                        listing.getId(),
+                        listing.getStatus(),
+                        listing.getHiddenReasonType()
+                )
+        );
     }
 
 }

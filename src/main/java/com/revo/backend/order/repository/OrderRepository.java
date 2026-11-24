@@ -504,4 +504,84 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
             @Param("now") LocalDateTime now
     );
 
+    @Query(value = """
+    SELECT COUNT(*)
+    FROM order_exceptions
+    WHERE order_id = :orderId
+      AND status = 'PENDING'
+    """, nativeQuery = true)
+    long countPendingOrderExceptions(
+            @Param("orderId") Long orderId
+    );
+
+    @Modifying(flushAutomatically = true)
+    @Query(value = """
+    UPDATE orders
+    SET shipping_history = JSON_ARRAY_APPEND(
+        shipping_history,
+        '$',
+        JSON_OBJECT(
+            'event_type', 'RETURN_RECEIVED',
+            'actual_at', :actualAt,
+            'recorded_at', :recordedAt,
+            'actor_type', 'ADMIN',
+            'admin_id', :adminId,
+            'actor_user_id', NULL,
+            'return_request_id', :returnId,
+            'note', :note
+        ),
+        '$',
+        JSON_OBJECT(
+            'event_type', 'COD_REFUNDED',
+            'actual_at', :recordedAt,
+            'recorded_at', :recordedAt,
+            'actor_type', 'ADMIN',
+            'admin_id', :adminId,
+            'actor_user_id', NULL,
+            'return_request_id', :returnId,
+            'amount', :codAmount
+        )
+    ),
+    updated_at = :now
+    WHERE id = :orderId
+    """, nativeQuery = true)
+    int appendReturnReceiptEvents(
+            @Param("orderId") Long orderId,
+            @Param("returnId") Long returnId,
+            @Param("adminId") Long adminId,
+            @Param("actualAt") String actualAt,
+            @Param("recordedAt") String recordedAt,
+            @Param("codAmount") Long codAmount,
+            @Param("note") String note,
+            @Param("now") LocalDateTime now
+    );
+
+    @Modifying(flushAutomatically = true)
+    @Query(value = """
+    UPDATE orders
+    SET shipping_history = JSON_ARRAY_APPEND(
+        shipping_history,
+        '$',
+        JSON_OBJECT(
+            'event_type', 'EXCEPTION_RECORDED',
+            'actual_at', :recordedAt,
+            'recorded_at', :recordedAt,
+            'actor_type', 'ADMIN',
+            'admin_id', :adminId,
+            'actor_user_id', NULL,
+            'exception_id', :exceptionId,
+            'reason', 'COD_ALREADY_SETTLED'
+        )
+    ),
+    updated_at = :now
+    WHERE id = :orderId
+    """, nativeQuery = true)
+    int appendCodSettlementExceptionEvent(
+            @Param("orderId") Long orderId,
+            @Param("exceptionId") Long exceptionId,
+            @Param("adminId") Long adminId,
+            @Param("recordedAt") String recordedAt,
+            @Param("now") LocalDateTime now
+    );
+
 }

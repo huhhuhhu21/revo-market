@@ -213,4 +213,19 @@ public class ProductListing {
     }
 
 
+    public void hideAfterSuccessfulReturn() {
+        if (deleted
+                || (status != ListingStatus.IN_TRANSACTION
+                && status != ListingStatus.SOLD)) {
+            throw new IllegalStateException(
+                    "Listing cannot be hidden after return"
+            );
+        }
+
+        this.status = ListingStatus.HIDDEN;
+        this.hiddenReasonType = "RETURNED";
+
+        // Không thay đổi adminHidden hoặc deleted.
+    }
+
 }

@@ -167,4 +167,22 @@ public class Notification {
         return notification;
     }
 
+    public static Notification codRefunded(
+            User buyer,
+            Long orderId
+    ) {
+        Notification notification = new Notification();
+
+        notification.user = buyer;
+        notification.type = "COD_REFUNDED";
+        notification.content =
+                "Đơn hàng đã hoàn tất trả hàng. "
+                        + "COD đã được hoàn cho bạn (mô phỏng).";
+
+        notification.refType = "ORDER";
+        notification.refId = orderId;
+
+        return notification;
+    }
+
 }
