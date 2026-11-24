@@ -145,4 +145,26 @@ public class Notification {
         return notification;
     }
 
+    public static Notification returnHandoverRecorded(
+            User recipient,
+            Long returnId,
+            boolean isBuyer
+    ) {
+        Notification notification = new Notification();
+
+        notification.user = recipient;
+        notification.type = "RETURN_HANDOVER_RECORDED";
+
+        notification.content = isBuyer
+                ? "Đã ghi nhận bạn bàn giao hàng trả. "
+                + "Hàng đang được chuyển về người bán."
+                : "Người mua đã bàn giao hàng trả. "
+                + "Hàng đang được chuyển hoàn.";
+
+        notification.refType = "RETURN_REQUEST";
+        notification.refId = returnId;
+
+        return notification;
+    }
+
 }

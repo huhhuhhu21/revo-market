@@ -152,4 +152,21 @@ public class ReturnRequest {
         this.adminReason = note;
     }
 
+    public void recordHandover(LocalDateTime actualAt) {
+        if (status != ReturnStatus.AWAITING_HANDOVER
+                || processedAt == null
+                || returnDeadline == null
+                || handedOverAt != null) {
+            throw new IllegalStateException(
+                    "Return request is not ready for handover"
+            );
+        }
+
+        this.handedOverAt = actualAt;
+        this.status = ReturnStatus.RETURNING;
+
+        // Không cập nhật returnedAt.
+        // returnedAt chỉ được ghi khi D11 hoàn tất.
+    }
+
 }

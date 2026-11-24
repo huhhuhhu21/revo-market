@@ -457,7 +457,28 @@ public enum ErrorCode {
     RETURN_NOT_PENDING(
             HttpStatus.CONFLICT,
             "Yêu cầu trả hàng không còn ở trạng thái chờ xử lý."
+    ),
+
+    RETURN_NOT_AWAITING_HANDOVER(
+            HttpStatus.CONFLICT,
+            "Yêu cầu trả hàng chưa đủ điều kiện ghi nhận bàn giao."
+    ),
+
+    RETURN_HANDOVER_DEADLINE_EXPIRED(
+            HttpStatus.UNPROCESSABLE_CONTENT,
+            "Thời điểm bàn giao thực tế vượt quá hạn cho phép."
+    ),
+
+    COD_NOT_HELD(
+            HttpStatus.CONFLICT,
+            "COD không ở trạng thái đang giữ."
+    ),
+
+    RETURN_HANDOVER_REQUIRES_EXCEPTION(
+            HttpStatus.CONFLICT,
+            "Việc bàn giao cần được xử lý qua ngoại lệ."
     );
+
 
 
 

@@ -63,4 +63,32 @@ public class OrderException {
     public Long getId() {
         return id;
     }
+
+    public static OrderException lateReturnHandover(
+            Order order,
+            User admin,
+            Long returnId,
+            LocalDateTime actualAt,
+            LocalDateTime recordedAt
+    ) {
+        OrderException exception = new OrderException();
+
+        exception.order = order;
+        exception.createdBy = admin;
+        exception.exceptionType = "RETURN";
+        exception.status = "PENDING";
+
+        exception.description =
+                "Cần xác minh ghi nhận bàn giao hàng trả. "
+                        + "Return ID: " + returnId
+                        + ". Thời điểm bàn giao thực tế (UTC): "
+                        + actualAt
+                        + ". Thời điểm ADMIN ghi nhận (UTC): "
+                        + recordedAt;
+
+        exception.createdAt = recordedAt;
+
+        return exception;
+    }
+
 }
