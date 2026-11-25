@@ -115,4 +115,24 @@ public class OrderException {
         return exception;
     }
 
+    public static OrderException returnShippingDeliveryConflict(
+            Order order,
+            User admin,
+            LocalDateTime recordedAt
+    ) {
+        OrderException exception = new OrderException();
+
+        exception.order = order;
+        exception.createdBy = admin;
+        exception.exceptionType = "DELIVERY";
+        exception.status = "PENDING";
+        exception.description =
+                "D06: Phát hiện dấu hiệu giao hàng "
+                        + "trước khi hoàn tất chuyển hoàn do hủy. "
+                        + "Cần ADMIN xác minh trước khi quyết định.";
+        exception.createdAt = recordedAt;
+
+        return exception;
+    }
+
 }

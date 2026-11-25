@@ -613,4 +613,166 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
             @Param("now") LocalDateTime now
     );
 
+    @Query(value = """
+    SELECT
+        jt.actor_type,
+        jt.actor_user_id,
+        jt.reason,
+        jt.recorded_at
+    FROM orders o
+    JOIN JSON_TABLE(
+        o.shipping_history,
+        '$[*]'
+        COLUMNS (
+            seq_no FOR ORDINALITY,
+            event_type VARCHAR(64)
+                PATH '$.event_type',
+            actor_type VARCHAR(24)
+                PATH '$.actor_type',
+            actor_user_id BIGINT
+                PATH '$.actor_user_id',
+            reason VARCHAR(2000)
+                PATH '$.reason',
+            recorded_at VARCHAR(48)
+                PATH '$.recorded_at'
+        )
+    ) jt
+    WHERE o.id = :orderId
+      AND jt.event_type = 'CANCEL_REQUESTED'
+    ORDER BY jt.seq_no DESC
+    LIMIT 1
+    """, nativeQuery = true)
+    List<Object[]> findReturnShippingCancellationBasis(
+            @Param("orderId") Long orderId
+    );
+
+    @Query(value = """
+    SELECT jt.actual_at
+    FROM orders o
+    JOIN JSON_TABLE(
+        o.shipping_history,
+        '$[*]'
+        COLUMNS (
+            seq_no FOR ORDINALITY,
+            event_type VARCHAR(64)
+                PATH '$.event_type',
+            actual_at VARCHAR(48)
+                PATH '$.actual_at'
+        )
+    ) jt
+    WHERE o.id = :orderId
+      AND jt.event_type = 'RETURN_SHIPPING_COMPLETED'
+    ORDER BY jt.seq_no DESC
+    LIMIT 1
+    """, nativeQuery = true)
+    List<String> findReturnShippingCompletedTimes(
+            @Param("orderId") Long orderId
+    );
+
+    @Query(value = """
+    SELECT COUNT(*)
+    FROM orders o
+    JOIN JSON_TABLE(
+        o.shipping_history,
+        '$[*]'
+        COLUMNS (
+            event_type VARCHAR(64)
+                PATH '$.event_type'
+        )
+    ) jt
+    WHERE o.id = :orderId
+      AND jt.event_type IN (
+          'DELIVERED',
+          'DELIVERY_REPORTED_LATE'
+      )
+    """, nativeQuery = true)
+    long countDeliveryEvidence(
+            @Param("orderId") Long orderId
+    );
+
+    @Modifying(flushAutomatically = true)
+    @Query(value = """
+    UPDATE orders
+    SET shipping_history = JSON_ARRAY_APPEND(
+        shipping_history,
+        '$',
+        JSON_OBJECT(
+            'event_type', 'RETURN_SHIPPING_COMPLETED',
+            'actual_at', :actualAt,
+            'recorded_at', :recordedAt,
+            'actor_type', 'ADMIN',
+            'admin_id', :adminId,
+            'actor_user_id', NULL,
+            'reason', :cancelReason,
+            'note', :note
+        )
+    ),
+    updated_at = :now
+    WHERE id = :orderId
+    """, nativeQuery = true)
+    int appendReturnShippingCompletedEvent(
+            @Param("orderId") Long orderId,
+            @Param("actualAt") String actualAt,
+            @Param("recordedAt") String recordedAt,
+            @Param("adminId") Long adminId,
+            @Param("cancelReason") String cancelReason,
+            @Param("note") String note,
+            @Param("now") LocalDateTime now
+    );
+
+    @Query(value = """
+    SELECT jt.actual_at, jt.exception_id
+    FROM orders o
+    JOIN JSON_TABLE(
+        o.shipping_history,
+        '$[*]'
+        COLUMNS (
+            seq_no FOR ORDINALITY,
+            event_type VARCHAR(64)
+                PATH '$.event_type',
+            actual_at VARCHAR(48)
+                PATH '$.actual_at',
+            exception_id BIGINT
+                PATH '$.exception_id'
+        )
+    ) jt
+    WHERE o.id = :orderId
+      AND jt.event_type = 'RETURN_SHIPPING_CONFLICT'
+    ORDER BY jt.seq_no DESC
+    LIMIT 1
+    """, nativeQuery = true)
+    List<Object[]> findReturnShippingConflicts(
+            @Param("orderId") Long orderId
+    );
+
+    @Modifying(flushAutomatically = true)
+    @Query(value = """
+    UPDATE orders
+    SET shipping_history = JSON_ARRAY_APPEND(
+        shipping_history,
+        '$',
+        JSON_OBJECT(
+            'event_type', 'RETURN_SHIPPING_CONFLICT',
+            'actual_at', :actualAt,
+            'recorded_at', :recordedAt,
+            'actor_type', 'ADMIN',
+            'admin_id', :adminId,
+            'actor_user_id', NULL,
+            'exception_id', :exceptionId,
+            'note', :note
+        )
+    ),
+    updated_at = :now
+    WHERE id = :orderId
+    """, nativeQuery = true)
+    int appendReturnShippingConflictEvent(
+            @Param("orderId") Long orderId,
+            @Param("actualAt") String actualAt,
+            @Param("recordedAt") String recordedAt,
+            @Param("adminId") Long adminId,
+            @Param("exceptionId") Long exceptionId,
+            @Param("note") String note,
+            @Param("now") LocalDateTime now
+    );
+
 }

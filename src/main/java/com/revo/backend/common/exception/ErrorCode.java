@@ -497,7 +497,33 @@ public enum ErrorCode {
     RETURN_LISTING_STATE_INVALID(
             HttpStatus.CONFLICT,
             "Trạng thái bài đăng không phù hợp để hoàn tất trả hàng."
+    ),
+
+    RETURN_SHIPPING_NOT_READY(
+            HttpStatus.CONFLICT,
+            "Đơn hàng chưa đủ điều kiện hoàn tất chuyển hoàn."
+    ),
+
+    RETURN_SHIPPING_CANCEL_BASIS_MISSING(
+            HttpStatus.CONFLICT,
+            "Không tìm thấy căn cứ hủy khi đang vận chuyển."
+    ),
+
+    RETURN_SHIPPING_TIME_INVALID(
+            HttpStatus.UNPROCESSABLE_CONTENT,
+            "Thời điểm người bán nhận lại hàng không hợp lệ."
+    ),
+
+    RETURN_SHIPPING_ALREADY_COMPLETED(
+            HttpStatus.CONFLICT,
+            "Đã ghi nhận chuyển hoàn với thời điểm khác."
+    ),
+
+    RETURN_SHIPPING_REQUIRES_EXCEPTION(
+            HttpStatus.CONFLICT,
+            "Cần xử lý ngoại lệ trước khi hủy đơn."
     );
+
 
 
 

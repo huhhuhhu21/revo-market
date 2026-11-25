@@ -207,4 +207,24 @@ public class Notification {
         return notification;
     }
 
+    public static Notification returnShippingCompleted(
+            User recipient,
+            Long orderId,
+            boolean isAdmin
+    ) {
+        Notification notification = new Notification();
+
+        notification.user = recipient;
+        notification.type = "RETURN_SHIPPING_COMPLETED";
+        notification.content = isAdmin
+                ? "Đơn hàng đã hoàn tất chuyển hoàn và hủy."
+                : "Đơn hàng đã được hủy sau khi "
+                + "hàng chuyển hoàn về người bán.";
+
+        notification.refType = "ORDER";
+        notification.refId = orderId;
+
+        return notification;
+    }
+
 }

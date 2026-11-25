@@ -325,5 +325,35 @@ public class Order {
         // Không xóa thời điểm giao hàng hoặc hoàn thành cũ.
     }
 
+    public void completeReturnShippingCancellation(
+            User cancellationActor,
+            String reason,
+            LocalDateTime recordedAt
+    ) {
+        if (status != OrderStatus.IN_TRANSIT
+                || pickedUpAt == null
+                || deliveredAt != null
+                || canceledAt != null
+                || codStatus != CodStatus.NOT_COLLECTED
+                || codCollectedAt != null
+                || codSettledAt != null
+                || codRefundedAt != null) {
+            throw new IllegalStateException(
+                    "Order cannot complete return shipping"
+            );
+        }
+
+        this.status = OrderStatus.CANCELED;
+        this.codStatus = CodStatus.NO_COLLECTION;
+
+        this.canceledBy = cancellationActor;
+        this.cancelReason = reason;
+        this.canceledAt = recordedAt;
+        this.updatedAt = recordedAt;
+
+        // COD chưa được thu, vì thế không hoàn COD.
+        // Giữ nguyên pickedUpAt và lịch sử vận chuyển.
+    }
+
 
 }
