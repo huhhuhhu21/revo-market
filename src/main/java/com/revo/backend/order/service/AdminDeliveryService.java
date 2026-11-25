@@ -12,9 +12,7 @@ import com.revo.backend.order.dto.AdminDeliveryResponse;
 import com.revo.backend.order.dto.OrderDetailResponse;
 import com.revo.backend.order.entity.CodStatus;
 import com.revo.backend.order.entity.Order;
-import com.revo.backend.order.entity.OrderException;
 import com.revo.backend.order.entity.OrderStatus;
-import com.revo.backend.order.repository.OrderExceptionRepository;
 import com.revo.backend.order.repository.OrderRepository;
 
 import jakarta.persistence.EntityManager;
@@ -35,7 +33,6 @@ import java.util.Objects;
 public class AdminDeliveryService {
 
     private final OrderRepository orderRepository;
-    private final OrderExceptionRepository exceptionRepository;
     private final UserRepository userRepository;
     private final NotificationRepository notificationRepository;
 
@@ -44,23 +41,16 @@ public class AdminDeliveryService {
 
     public AdminDeliveryService(
             OrderRepository orderRepository,
-            OrderExceptionRepository exceptionRepository,
             UserRepository userRepository,
             NotificationRepository notificationRepository
     ) {
         this.orderRepository = orderRepository;
-        this.exceptionRepository = exceptionRepository;
         this.userRepository = userRepository;
         this.notificationRepository = notificationRepository;
     }
 
-    public record DeliveryOutcome(
-            AdminDeliveryResponse delivered,
-            Long exceptionId
-    ) {}
-
     @Transactional
-    public DeliveryOutcome deliver(
+    public AdminDeliveryResponse deliver(
             Long adminId,
             String rawOrderId,
             AdminDeliveryRequest request
@@ -111,48 +101,17 @@ public class AdminDeliveryService {
         // 3. Retry: đơn đã ghi nhận giao thành công.
         if (order.getDeliveredAt() != null) {
 
-            if (Objects.equals(
-                    order.getDeliveredAt(),
-                    actualAt
-            )) {
-                return new DeliveryOutcome(
-                        buildResponse(order),
-                        null
-                );
+            if (Objects.equals(order.getDeliveredAt(), actualAt)) {
+                if (order.getCodCollectedAt() == null
+                        || (order.getStatus() != OrderStatus.DELIVERED
+                            && order.getStatus() != OrderStatus.COMPLETED
+                            && order.getStatus() != OrderStatus.RETURNED)) {
+                    throw new BusinessException(ErrorCode.ORDER_NOT_READY_FOR_DELIVERY);
+                }
+                return buildResponse(order);
             }
 
-            throw new BusinessException(
-                    ErrorCode.DELIVERY_ALREADY_RECORDED
-            );
-        }
-
-        // 4. Retry: đã báo giao muộn trước đó.
-        List<Object[]> lateReports =
-                orderRepository.findLateDeliveryReports(orderId);
-
-        if (!lateReports.isEmpty()) {
-            Object[] previous = lateReports.get(0);
-
-            LocalDateTime previousActualAt =
-                    OffsetDateTime.parse(
-                            previous[0].toString()
-                    ).withOffsetSameInstant(
-                            ZoneOffset.UTC
-                    ).toLocalDateTime();
-
-            if (Objects.equals(previousActualAt, actualAt)) {
-                Long exceptionId =
-                        ((Number) previous[1]).longValue();
-
-                return new DeliveryOutcome(
-                        null,
-                        exceptionId
-                );
-            }
-
-            throw new BusinessException(
-                    ErrorCode.DELIVERY_ALREADY_RECORDED
-            );
+            throw new BusinessException(ErrorCode.DELIVERY_ALREADY_RECORDED);
         }
 
         // 5. Kiểm tra trạng thái.
@@ -193,9 +152,9 @@ public class AdminDeliveryService {
             );
         }
 
-        if (sqlTrue(conditions[2]) || sqlTrue(conditions[1])) {
+        if (sqlTrue(conditions[1])) {
             throw new BusinessException(
-                    ErrorCode.DELIVERY_HAS_BLOCKING_EXCEPTION
+                    ErrorCode.ORDER_NOT_READY_FOR_DELIVERY
             );
         }
 
@@ -212,44 +171,8 @@ public class AdminDeliveryService {
         String actualIso = utc(actualAt).toString();
         String recordedIso = utc(recordedAt).toString();
 
-        // 8. Trường hợp ghi nhận muộn hơn 48 giờ.
-        if (recordedAt.isAfter(actualAt.plusHours(48))) {
-
-            OrderException exception =
-                    exceptionRepository.saveAndFlush(
-                            OrderException.lateDelivery(
-                                    order,
-                                    admin,
-                                    actualAt,
-                                    recordedAt
-                            )
-                    );
-
-            int updated =
-                    orderRepository.appendLateDeliveryReportEvent(
-                            orderId,
-                            actualIso,
-                            recordedIso,
-                            adminId,
-                            exception.getId(),
-                            note,
-                            recordedAt
-                    );
-
-            if (updated != 1) {
-                throw new IllegalStateException(
-                        "Cannot record late delivery"
-                );
-            }
-
-            // Không chuyển DELIVERED và không thu COD.
-            // Trả kết quả để controller phát HTTP 409
-            // SAU KHI transaction đã commit.
-            return new DeliveryOutcome(
-                    null,
-                    exception.getId()
-            );
-        }
+        // Ghi nhận muộn vẫn được xử lý nếu actualAt hợp lệ.
+        // Mốc trả hàng 48h / quyết toán 72h luôn dựa vào deliveredAt = actualAt.
 
         // 9. Giao hàng thành công bình thường.
         order.recordDelivered(actualAt, recordedAt);
@@ -288,10 +211,7 @@ public class AdminDeliveryService {
                 )
         );
 
-        return new DeliveryOutcome(
-                buildResponse(order),
-                null
-        );
+        return buildResponse(order);
     }
 
     private AdminDeliveryResponse buildResponse(Order order) {

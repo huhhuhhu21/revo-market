@@ -15,9 +15,7 @@ import com.revo.backend.order.dto.AdminReturnShippingResponse;
 import com.revo.backend.order.dto.OrderDetailResponse;
 import com.revo.backend.order.entity.CodStatus;
 import com.revo.backend.order.entity.Order;
-import com.revo.backend.order.entity.OrderException;
 import com.revo.backend.order.entity.OrderStatus;
-import com.revo.backend.order.repository.OrderExceptionRepository;
 import com.revo.backend.order.repository.OrderRepository;
 
 import org.springframework.stereotype.Service;
@@ -38,29 +36,21 @@ public class AdminReturnShippingService {
     private final ListingRepository listingRepository;
     private final UserRepository userRepository;
     private final NotificationRepository notificationRepository;
-    private final OrderExceptionRepository exceptionRepository;
 
     public AdminReturnShippingService(
             OrderRepository orderRepository,
             ListingRepository listingRepository,
             UserRepository userRepository,
-            NotificationRepository notificationRepository,
-            OrderExceptionRepository exceptionRepository
+            NotificationRepository notificationRepository
     ) {
         this.orderRepository = orderRepository;
         this.listingRepository = listingRepository;
         this.userRepository = userRepository;
         this.notificationRepository = notificationRepository;
-        this.exceptionRepository = exceptionRepository;
     }
 
-    public record CompletionOutcome(
-            AdminReturnShippingResponse response,
-            Long exceptionId
-    ) {}
-
     @Transactional
-    public CompletionOutcome complete(
+    public AdminReturnShippingResponse complete(
             Long adminId,
             String rawOrderId,
             AdminReturnShippingRequest request
@@ -138,10 +128,7 @@ public class AdminReturnShippingService {
             )) {
                 // Retry cùng thời điểm:
                 // không cập nhật hay gửi thông báo lần hai.
-                return new CompletionOutcome(
-                        buildResponse(order, listing),
-                        null
-                );
+                return buildResponse(order, listing);
             }
 
             throw new BusinessException(
@@ -229,33 +216,6 @@ public class AdminReturnShippingService {
         // Giữ chính xác người khởi tạo và lý do gốc.
         User cancellationActor = order.getBuyer();
 
-        // 9. Nếu đã báo xung đột giao hàng, xử lý retry.
-        List<Object[]> previousConflicts =
-                orderRepository.findReturnShippingConflicts(
-                        orderId
-                );
-
-        if (!previousConflicts.isEmpty()) {
-            Object[] previous = previousConflicts.get(0);
-
-            LocalDateTime previousActual =
-                    parseIsoTime(previous[0].toString());
-
-            if (Objects.equals(previousActual, actualAt)) {
-                Long exceptionId =
-                        ((Number) previous[1]).longValue();
-
-                return new CompletionOutcome(
-                        null,
-                        exceptionId
-                );
-            }
-
-            throw new BusinessException(
-                    ErrorCode.RETURN_SHIPPING_REQUIRES_EXCEPTION
-            );
-        }
-
         // 10. Chuẩn hóa ghi chú.
         String note = request.note();
 
@@ -272,16 +232,6 @@ public class AdminReturnShippingService {
         String recordedIso =
                 recordedAt.atOffset(ZoneOffset.UTC).toString();
 
-        // 11. Có ngoại lệ chưa xử lý:
-        // không được tự hoàn tất hủy.
-        if (orderRepository.countPendingOrderExceptions(
-                orderId
-        ) > 0) {
-            throw new BusinessException(
-                    ErrorCode.ORDER_HAS_BLOCKING_EXCEPTION
-            );
-        }
-
         // 12. Có dấu vết giao/thu COD:
         // tạo ngoại lệ DELIVERY và trả 409 sau commit.
         boolean deliveryConflict =
@@ -296,36 +246,9 @@ public class AdminReturnShippingService {
                 ) > 0;
 
         if (deliveryConflict) {
-            OrderException exception =
-                    exceptionRepository.saveAndFlush(
-                            OrderException
-                                    .returnShippingDeliveryConflict(
-                                            order,
-                                            admin,
-                                            recordedAt
-                                    )
-                    );
-
-            int recorded =
-                    orderRepository.appendReturnShippingConflictEvent(
-                            orderId,
-                            actualIso,
-                            recordedIso,
-                            adminId,
-                            exception.getId(),
-                            note,
-                            recordedAt
-                    );
-
-            if (recorded != 1) {
-                throw new IllegalStateException(
-                        "Cannot record return shipping conflict"
-                );
-            }
-
-            return new CompletionOutcome(
-                    null,
-                    exception.getId()
+            // Không tạo ngoại lệ: từ chối ngay, đơn/COD không thay đổi.
+            throw new BusinessException(
+                    ErrorCode.RETURN_SHIPPING_DELIVERY_CONFLICT
             );
         }
 
@@ -413,10 +336,7 @@ public class AdminReturnShippingService {
         notificationRepository.saveAll(notifications);
 
         // 17. Trả dữ liệu sau khi hoàn tất.
-        return new CompletionOutcome(
-                buildResponse(order, listing),
-                null
-        );
+        return buildResponse(order, listing);
     }
 
     private AdminReturnShippingResponse buildResponse(

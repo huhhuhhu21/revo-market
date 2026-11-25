@@ -43,8 +43,6 @@ import com.revo.backend.order.dto.ApproveReturnRequest;
 import com.revo.backend.order.entity.ReturnStatus;
 
 import com.revo.backend.order.dto.AdminReturnHandoverRequest;
-import com.revo.backend.order.entity.OrderException;
-import com.revo.backend.order.repository.OrderExceptionRepository;
 
 import java.util.Objects;
 
@@ -65,7 +63,6 @@ public class ReturnRequestService {
     private final UserRepository userRepository;
     private final NotificationRepository notificationRepository;
     private final MediaService mediaService;
-    private final OrderExceptionRepository exceptionRepository;
     private final ListingRepository listingRepository;
 
     public ReturnRequestService(
@@ -74,7 +71,6 @@ public class ReturnRequestService {
             UserRepository userRepository,
             NotificationRepository notificationRepository,
             MediaService mediaService,
-            OrderExceptionRepository exceptionRepository,
             ListingRepository listingRepository
     ) {
         this.orderRepository = orderRepository;
@@ -82,7 +78,6 @@ public class ReturnRequestService {
         this.userRepository = userRepository;
         this.notificationRepository = notificationRepository;
         this.mediaService = mediaService;
-        this.exceptionRepository = exceptionRepository;
         this.listingRepository = listingRepository;
     }
 
@@ -90,17 +85,6 @@ public class ReturnRequestService {
             ReturnRequestResponse response,
             boolean created
     ) {}
-
-    public record HandoverOutcome(
-            ReturnRequestResponse response,
-            Long exceptionId
-    ) {}
-
-    public record ReceiptOutcome(
-            AdminReturnReceiptResponse response,
-            Long exceptionId
-    ) {}
-
 
     @Transactional
     public CreateResult create(
@@ -225,16 +209,6 @@ public class ReturnRequestService {
         if (now.isBefore(order.getDeliveredAt())) {
             throw new BusinessException(
                     ErrorCode.ORDER_NOT_ELIGIBLE_FOR_RETURN
-            );
-        }
-
-        // 9. Không cho tạo khi có ngoại lệ giao/COD
-        // chưa được giải quyết.
-        if (orderRepository.countBlockingReturnExceptions(
-                orderId
-        ) > 0) {
-            throw new BusinessException(
-                    ErrorCode.ORDER_HAS_BLOCKING_EXCEPTION
             );
         }
 
@@ -722,597 +696,214 @@ public class ReturnRequestService {
         );
     }
 
+    /** D10: Chặn trực tiếp khi không đủ điều kiện, không tạo order_exceptions. */
     @Transactional
-    public HandoverOutcome recordReturnHandover(
+    public ReturnRequestResponse recordReturnHandover(
             Long adminId,
             String rawReturnId,
             AdminReturnHandoverRequest request
     ) {
-        // 1. Kiểm tra request.
         Long returnId = parseReturnId(rawReturnId);
-
         if (request == null || request.actualAt() == null) {
-            throw new BusinessException(
-                    ErrorCode.VALIDATION_ERROR
-            );
+            throw new BusinessException(ErrorCode.VALIDATION_ERROR);
         }
 
-        // 2. Kiểm tra ADMIN hiện tại.
         User admin = userRepository.findById(adminId)
-                .orElseThrow(() -> new BusinessException(
-                        ErrorCode.FORBIDDEN
-                ));
-
+                .orElseThrow(() -> new BusinessException(ErrorCode.FORBIDDEN));
         if (admin.getRole() != User.Role.ADMIN
                 || admin.getStatus() != User.Status.ACTIVE) {
-            throw new BusinessException(
-                    ErrorCode.FORBIDDEN
-            );
+            throw new BusinessException(ErrorCode.FORBIDDEN);
         }
 
-        // 3. Chuẩn hóa thời gian UTC đến mili giây.
-        LocalDateTime recordedAt =
-                LocalDateTime.now(ZoneOffset.UTC)
-                        .truncatedTo(ChronoUnit.MILLIS);
-
-        LocalDateTime actualAt =
-                request.actualAt()
-                        .withOffsetSameInstant(ZoneOffset.UTC)
-                        .toLocalDateTime()
-                        .truncatedTo(ChronoUnit.MILLIS);
-
+        LocalDateTime recordedAt = LocalDateTime.now(ZoneOffset.UTC)
+                .truncatedTo(ChronoUnit.MILLIS);
+        LocalDateTime actualAt = request.actualAt()
+                .withOffsetSameInstant(ZoneOffset.UTC)
+                .toLocalDateTime()
+                .truncatedTo(ChronoUnit.MILLIS);
         if (actualAt.isAfter(recordedAt)) {
-            throw new BusinessException(
-                    ErrorCode.VALIDATION_ERROR
-            );
+            throw new BusinessException(ErrorCode.VALIDATION_ERROR);
         }
 
-        // 4. Tìm Order ID trước khi khóa dữ liệu.
-        Long orderId = returnRepository
-                .findOrderIdByReturnId(returnId)
+        Long orderId = returnRepository.findOrderIdByReturnId(returnId)
                 .orElseThrow(() -> new BusinessException(
-                        ErrorCode.RETURN_REQUEST_NOT_FOUND
-                ));
-
-        // 5. Khóa Order trước, ReturnRequest sau.
-        Order order = orderRepository
-                .findByIdForUpdate(orderId)
+                        ErrorCode.RETURN_REQUEST_NOT_FOUND));
+        Order order = orderRepository.findByIdForUpdate(orderId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.ORDER_NOT_FOUND));
+        ReturnRequest returnRequest = returnRepository.findByIdForUpdate(returnId)
                 .orElseThrow(() -> new BusinessException(
-                        ErrorCode.ORDER_NOT_FOUND
-                ));
-
-        ReturnRequest returnRequest = returnRepository
-                .findByIdForUpdate(returnId)
-                .orElseThrow(() -> new BusinessException(
-                        ErrorCode.RETURN_REQUEST_NOT_FOUND
-                ));
+                        ErrorCode.RETURN_REQUEST_NOT_FOUND));
 
         ReturnStatus status = returnRequest.getStatus();
-
-        // 6. Retry khi đã ghi nhận bàn giao thành công.
-        if (status == ReturnStatus.RETURNING
-                || status == ReturnStatus.RETURNED) {
-
-            if (Objects.equals(
-                    returnRequest.getHandedOverAt(),
-                    actualAt
-            )) {
-                return new HandoverOutcome(
-                        toAdminResponse(returnRequest),
-                        null
-                );
+        // Idempotency: không tạo thêm event hoặc thông báo.
+        if (status == ReturnStatus.RETURNING || status == ReturnStatus.RETURNED) {
+            if (Objects.equals(returnRequest.getHandedOverAt(), actualAt)) {
+                return toAdminResponse(returnRequest);
             }
-
-            throw new BusinessException(
-                    ErrorCode.RETURN_NOT_AWAITING_HANDOVER
-            );
+            throw new BusinessException(ErrorCode.RETURN_NOT_AWAITING_HANDOVER);
+        }
+        if (status == ReturnStatus.HANDOVER_EXPIRED) {
+            throw new BusinessException(ErrorCode.RETURN_HANDOVER_DEADLINE_EXPIRED);
+        }
+        if (status != ReturnStatus.AWAITING_HANDOVER) {
+            throw new BusinessException(ErrorCode.RETURN_NOT_AWAITING_HANDOVER);
         }
 
-        // 7. Kiểm tra báo cáo bàn giao muộn trước đó.
-        List<Object[]> previousReports =
-                orderRepository.findLateReturnHandoverReports(
-                        orderId,
-                        returnId
-                );
-
-        if (!previousReports.isEmpty()) {
-            Object[] previous = previousReports.get(0);
-
-            LocalDateTime previousActualAt =
-                    OffsetDateTime.parse(
-                                    previous[0].toString()
-                            ).withOffsetSameInstant(ZoneOffset.UTC)
-                            .toLocalDateTime()
-                            .truncatedTo(ChronoUnit.MILLIS);
-
-            if (Objects.equals(previousActualAt, actualAt)) {
-                Long exceptionId =
-                        ((Number) previous[1]).longValue();
-
-                return new HandoverOutcome(
-                        null,
-                        exceptionId
-                );
-            }
-
-            throw new BusinessException(
-                    ErrorCode.RETURN_NOT_AWAITING_HANDOVER
-            );
+        LocalDateTime approvedAt = returnRequest.getProcessedAt();
+        LocalDateTime deadline = returnRequest.getReturnDeadline();
+        if (approvedAt == null || deadline == null
+                || !deadline.equals(approvedAt.plusHours(48))) {
+            throw new BusinessException(ErrorCode.RETURN_NOT_AWAITING_HANDOVER);
+        }
+        if (actualAt.isBefore(approvedAt)) {
+            throw new BusinessException(ErrorCode.VALIDATION_ERROR);
+        }
+        // Với quy trình mô phỏng: ADMIN phải xác nhận trong hạn.
+        // Không có nhánh xử lý ngoại lệ để mở lại yêu cầu đã quá hạn.
+        if (actualAt.isAfter(deadline) || recordedAt.isAfter(deadline)) {
+            throw new BusinessException(ErrorCode.RETURN_HANDOVER_DEADLINE_EXPIRED);
         }
 
-        // 8. Chỉ hai trạng thái này được xét tiếp:
-        // AWAITING_HANDOVER: luồng bình thường.
-        // HANDOVER_EXPIRED: chỉ chuyển xử lý ngoại lệ.
-        if (status != ReturnStatus.AWAITING_HANDOVER
-                && status != ReturnStatus.HANDOVER_EXPIRED) {
-            throw new BusinessException(
-                    ErrorCode.RETURN_NOT_AWAITING_HANDOVER
-            );
+        if (order.getStatus() != OrderStatus.DELIVERED
+                && order.getStatus() != OrderStatus.COMPLETED) {
+            throw new BusinessException(ErrorCode.ORDER_NOT_ELIGIBLE_FOR_RETURN);
         }
-
-        LocalDateTime processedAt =
-                returnRequest.getProcessedAt();
-
-        LocalDateTime deadline =
-                returnRequest.getReturnDeadline();
-
-        if (processedAt == null || deadline == null
-                || !deadline.equals(processedAt.plusHours(48))) {
-            throw new BusinessException(
-                    ErrorCode.RETURN_NOT_AWAITING_HANDOVER
-            );
-        }
-
-        // 9. Kiểm tra thời điểm bàn giao thực tế.
-        if (actualAt.isBefore(processedAt)) {
-            throw new BusinessException(
-                    ErrorCode.VALIDATION_ERROR
-            );
-        }
-
-        if (actualAt.isAfter(deadline)) {
-            throw new BusinessException(
-                    ErrorCode.RETURN_HANDOVER_DEADLINE_EXPIRED
-            );
-        }
-
-        // 10. Kiểm tra trạng thái đơn và COD.
-        boolean validOrderStatus =
-                order.getStatus() == OrderStatus.DELIVERED
-                        || order.getStatus() == OrderStatus.COMPLETED;
-
-        if (!validOrderStatus) {
-            throw new BusinessException(
-                    ErrorCode.ORDER_NOT_ELIGIBLE_FOR_RETURN
-            );
-        }
-
         if (order.getCodStatus() != CodStatus.HELD) {
-            throw new BusinessException(
-                    ErrorCode.COD_NOT_HELD
-            );
+            throw new BusinessException(ErrorCode.COD_NOT_HELD);
         }
 
-        // 11. Chuẩn hóa ghi chú.
         String note = request.note();
-
         if (note != null) {
             note = note.trim();
-
-            if (note.isEmpty()) {
-                note = null;
-            }
+            if (note.isEmpty()) note = null;
         }
 
-        String actualIso =
-                actualAt.atOffset(ZoneOffset.UTC).toString();
-
-        String recordedIso =
-                recordedAt.atOffset(ZoneOffset.UTC).toString();
-
-        // 12. Trường hợp phải xử lý ngoại lệ:
-        // - ADMIN ghi nhận sau returnDeadline;
-        // - hoặc job đã chuyển HANDOVER_EXPIRED.
-        boolean requiresException =
-                recordedAt.isAfter(deadline)
-                        || status == ReturnStatus.HANDOVER_EXPIRED;
-
-        if (requiresException) {
-
-            OrderException exception =
-                    exceptionRepository.saveAndFlush(
-                            OrderException.lateReturnHandover(
-                                    order,
-                                    admin,
-                                    returnId,
-                                    actualAt,
-                                    recordedAt
-                            )
-                    );
-
-            int updated =
-                    orderRepository.appendLateReturnHandoverEvent(
-                            orderId,
-                            returnId,
-                            adminId,
-                            exception.getId(),
-                            actualIso,
-                            recordedIso,
-                            note,
-                            recordedAt
-                    );
-
-            if (updated != 1) {
-                throw new IllegalStateException(
-                        "Could not record late handover report"
-                );
-            }
-
-            // Không cập nhật return_requests.status.
-            // Không hoàn COD.
-            // Controller sẽ trả HTTP 409 sau commit.
-            return new HandoverOutcome(
-                    null,
-                    exception.getId()
-            );
-        }
-
-        // 13. Kiểm tra ngoại lệ đang chặn.
-        List<Object[]> conditionRows =
-                orderRepository.findOrderUiConditions(
-                        List.of(orderId)
-                );
-
-        if (conditionRows.size() != 1) {
-            throw new IllegalStateException(
-                    "Missing order conditions: " + orderId
-            );
-        }
-
-        Object blockingException = conditionRows.get(0)[2];
-
-        if (sqlTrueD10(blockingException)) {
-            throw new BusinessException(
-                    ErrorCode.ORDER_HAS_BLOCKING_EXCEPTION
-            );
-        }
-
-        // 14. Bàn giao hợp lệ.
         returnRequest.recordHandover(actualAt);
         returnRepository.saveAndFlush(returnRequest);
-
-        // 15. Ghi sự kiện RETURN_HANDOVER.
         int updated = orderRepository.appendReturnHandoverEvent(
-                orderId,
-                returnId,
-                adminId,
-                actualIso,
-                recordedIso,
-                note,
-                recordedAt
+                orderId, returnId, adminId,
+                actualAt.atOffset(ZoneOffset.UTC).toString(),
+                recordedAt.atOffset(ZoneOffset.UTC).toString(),
+                note, recordedAt
         );
-
         if (updated != 1) {
-            throw new IllegalStateException(
-                    "Could not append RETURN_HANDOVER event"
-            );
+            throw new IllegalStateException("Cannot append RETURN_HANDOVER event");
         }
 
-        // 16. Thông báo cho người mua và người bán.
-        notificationRepository.saveAll(
-                List.of(
-                        Notification.returnHandoverRecorded(
-                                order.getBuyer(),
-                                returnId,
-                                true
-                        ),
-                        Notification.returnHandoverRecorded(
-                                order.getSeller(),
-                                returnId,
-                                false
-                        )
-                )
-        );
-
-        // Không thay đổi Order.status, COD hoặc Listing.
-        return new HandoverOutcome(
-                toAdminResponse(returnRequest),
-                null
-        );
+        notificationRepository.saveAll(List.of(
+                Notification.returnHandoverRecorded(order.getBuyer(), returnId, true),
+                Notification.returnHandoverRecorded(order.getSeller(), returnId, false)
+        ));
+        return toAdminResponse(returnRequest);
     }
 
-    private static boolean sqlTrueD10(Object value) {
-        if (value instanceof Boolean bool) {
-            return bool;
-        }
-
-        if (value instanceof Number number) {
-            return number.intValue() != 0;
-        }
-
-        return false;
-    }
-
+    /** D11: Hoàn COD mô phỏng đúng một lần; không tạo ngoại lệ COD_ORDER. */
     @Transactional
-    public ReceiptOutcome recordReturnReceipt(
+    public AdminReturnReceiptResponse recordReturnReceipt(
             Long adminId,
             String rawReturnId,
             AdminReturnReceiptRequest request
     ) {
-        // 1. Kiểm tra input.
         Long returnId = parseReturnId(rawReturnId);
-
         if (request == null || request.actualAt() == null) {
-            throw new BusinessException(
-                    ErrorCode.VALIDATION_ERROR
-            );
+            throw new BusinessException(ErrorCode.VALIDATION_ERROR);
         }
 
-        // 2. Kiểm tra ADMIN đang hoạt động.
         User admin = userRepository.findById(adminId)
-                .orElseThrow(() -> new BusinessException(
-                        ErrorCode.FORBIDDEN
-                ));
-
+                .orElseThrow(() -> new BusinessException(ErrorCode.FORBIDDEN));
         if (admin.getRole() != User.Role.ADMIN
                 || admin.getStatus() != User.Status.ACTIVE) {
-            throw new BusinessException(
-                    ErrorCode.FORBIDDEN
-            );
+            throw new BusinessException(ErrorCode.FORBIDDEN);
         }
 
-        // 3. Thời gian ghi nhận do backend tạo.
-        LocalDateTime recordedAt =
-                LocalDateTime.now(ZoneOffset.UTC)
-                        .truncatedTo(ChronoUnit.MILLIS);
-
-        LocalDateTime actualAt =
-                request.actualAt()
-                        .withOffsetSameInstant(ZoneOffset.UTC)
-                        .toLocalDateTime()
-                        .truncatedTo(ChronoUnit.MILLIS);
-
+        LocalDateTime recordedAt = LocalDateTime.now(ZoneOffset.UTC)
+                .truncatedTo(ChronoUnit.MILLIS);
+        LocalDateTime actualAt = request.actualAt()
+                .withOffsetSameInstant(ZoneOffset.UTC)
+                .toLocalDateTime()
+                .truncatedTo(ChronoUnit.MILLIS);
         if (actualAt.isAfter(recordedAt)) {
-            throw new BusinessException(
-                    ErrorCode.VALIDATION_ERROR
-            );
+            throw new BusinessException(ErrorCode.VALIDATION_ERROR);
         }
 
-        // 4. Tra cứu Order ID từ ReturnRequest.
-        Long orderId = returnRepository
-                .findOrderIdByReturnId(returnId)
+        Long orderId = returnRepository.findOrderIdByReturnId(returnId)
                 .orElseThrow(() -> new BusinessException(
-                        ErrorCode.RETURN_REQUEST_NOT_FOUND
-                ));
-
-        // 5. Khóa Order trước.
-        // Job quyết toán COD cũng phải sử dụng khóa này.
-        Order order = orderRepository
-                .findByIdForUpdate(orderId)
+                        ErrorCode.RETURN_REQUEST_NOT_FOUND));
+        // Khóa Order trước (các job quyết toán phải dùng cùng khóa này).
+        Order order = orderRepository.findByIdForUpdate(orderId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.ORDER_NOT_FOUND));
+        ReturnRequest returnRequest = returnRepository.findByIdForUpdate(returnId)
                 .orElseThrow(() -> new BusinessException(
-                        ErrorCode.ORDER_NOT_FOUND
-                ));
+                        ErrorCode.RETURN_REQUEST_NOT_FOUND));
 
-        // 6. Khóa ReturnRequest sau Order.
-        ReturnRequest returnRequest = returnRepository
-                .findByIdForUpdate(returnId)
-                .orElseThrow(() -> new BusinessException(
-                        ErrorCode.RETURN_REQUEST_NOT_FOUND
-                ));
-
-        // 7. Retry khi đã hoàn tất trả hàng.
         if (returnRequest.getStatus() == ReturnStatus.RETURNED) {
-
-            boolean sameReceipt = Objects.equals(
-                    returnRequest.getReturnedAt(),
-                    actualAt
-            );
-
-            boolean alreadyRefunded =
-                    order.getStatus() == OrderStatus.RETURNED
-                            && order.getCodStatus() == CodStatus.REFUNDED
-                            && order.getCodRefundedAt() != null;
-
-            if (sameReceipt && alreadyRefunded) {
-                // Không cập nhật returnedAt hay codRefundedAt.
-                // Không ghi lịch sử hoặc gửi thông báo.
-                return new ReceiptOutcome(
-                        buildReceiptResponse(
-                                returnRequest,
-                                order,
-                                order.getListing()
-                        ),
-                        null
-                );
+            if (Objects.equals(returnRequest.getReturnedAt(), actualAt)
+                    && order.getStatus() == OrderStatus.RETURNED
+                    && order.getCodStatus() == CodStatus.REFUNDED
+                    && order.getCodRefundedAt() != null) {
+                // Retry: không đụng COD, listing hay notification.
+                return buildReceiptResponse(returnRequest, order, order.getListing());
             }
-
-            throw new BusinessException(
-                    ErrorCode.RETURN_NOT_RETURNING
-            );
+            throw new BusinessException(ErrorCode.RETURN_NOT_RETURNING);
         }
-
-        // 8. Chỉ yêu cầu RETURNING được tiếp tục.
         if (returnRequest.getStatus() != ReturnStatus.RETURNING
                 || returnRequest.getHandedOverAt() == null
                 || returnRequest.getReturnedAt() != null) {
-            throw new BusinessException(
-                    ErrorCode.RETURN_NOT_RETURNING
-            );
+            throw new BusinessException(ErrorCode.RETURN_NOT_RETURNING);
         }
-
-        // 9. Kiểm tra thời gian người bán nhận hàng.
-        if (actualAt.isBefore(
-                returnRequest.getHandedOverAt()
-        )) {
-            throw new BusinessException(
-                    ErrorCode.RETURN_RECEIPT_TIME_INVALID
-            );
+        if (actualAt.isBefore(returnRequest.getHandedOverAt())) {
+            throw new BusinessException(ErrorCode.RETURN_RECEIPT_TIME_INVALID);
         }
-
-        // 10. Kiểm tra trạng thái đơn.
-        boolean validOrderStatus =
-                order.getStatus() == OrderStatus.DELIVERED
-                        || order.getStatus() == OrderStatus.COMPLETED;
-
-        if (!validOrderStatus || order.getDeliveredAt() == null) {
-            throw new BusinessException(
-                    ErrorCode.ORDER_NOT_ELIGIBLE_FOR_RETURN
-            );
+        if ((order.getStatus() != OrderStatus.DELIVERED
+                && order.getStatus() != OrderStatus.COMPLETED)
+                || order.getDeliveredAt() == null) {
+            throw new BusinessException(ErrorCode.ORDER_NOT_ELIGIBLE_FOR_RETURN);
         }
-
-        // 11. COD đã SETTLED: phải tạo ngoại lệ,
-        // tuyệt đối không tự hoàn lần thứ hai.
         if (order.getCodStatus() == CodStatus.SETTLED
                 || order.getCodSettledAt() != null) {
-
-            Long existingExceptionId = exceptionRepository
-                    .findExistingCodSettledException(orderId)
-                    .orElse(null);
-
-            if (existingExceptionId != null) {
-                return new ReceiptOutcome(
-                        null,
-                        existingExceptionId
-                );
-            }
-
-            OrderException exception =
-                    exceptionRepository.saveAndFlush(
-                            OrderException.codAlreadySettled(
-                                    order,
-                                    admin,
-                                    returnId,
-                                    recordedAt
-                            )
-                    );
-
-            String recordedIso =
-                    recordedAt.atOffset(ZoneOffset.UTC).toString();
-
-            int recorded =
-                    orderRepository.appendCodSettlementExceptionEvent(
-                            orderId,
-                            exception.getId(),
-                            adminId,
-                            recordedIso,
-                            recordedAt
-                    );
-
-            if (recorded != 1) {
-                throw new IllegalStateException(
-                        "Cannot record COD exception"
-                );
-            }
-
-            // Không đổi ReturnRequest / Order / Listing.
-            // Controller trả 409 sau khi transaction commit.
-            return new ReceiptOutcome(
-                    null,
-                    exception.getId()
-            );
+            // Trạng thái mâu thuẫn: chặn trực tiếp, tuyệt đối không hoàn lần hai.
+            throw new BusinessException(ErrorCode.COD_ALREADY_SETTLED);
         }
-
-        // 12. COD phải đang giữ và đã được thu hợp lệ.
         if (order.getCodStatus() != CodStatus.HELD
                 || order.getCodCollectedAt() == null
                 || order.getCodRefundedAt() != null) {
-            throw new BusinessException(
-                    ErrorCode.COD_NOT_HELD
-            );
+            throw new BusinessException(ErrorCode.COD_NOT_HELD);
         }
 
-        // 13. Không hoàn COD khi có ngoại lệ PENDING.
-        if (orderRepository.countPendingOrderExceptions(
-                orderId
-        ) > 0) {
-            throw new BusinessException(
-                    ErrorCode.ORDER_HAS_BLOCKING_EXCEPTION
-            );
-        }
-
-        // 14. Khóa bài đăng trước khi thay đổi trạng thái.
         ProductListing listing = listingRepository
                 .findByIdForUpdate(order.getListing().getId())
-                .orElseThrow(() -> new BusinessException(
-                        ErrorCode.LISTING_NOT_FOUND
-                ));
-
-        boolean validListing =
-                !listing.isDeleted()
-                        && (
-                        listing.getStatus()
-                                == ListingStatus.IN_TRANSACTION
-                                || listing.getStatus()
-                                == ListingStatus.SOLD
-                );
-
-        if (!validListing) {
-            throw new BusinessException(
-                    ErrorCode.RETURN_LISTING_STATE_INVALID
-            );
+                .orElseThrow(() -> new BusinessException(ErrorCode.LISTING_NOT_FOUND));
+        if (listing.isDeleted()
+                || (listing.getStatus() != ListingStatus.IN_TRANSACTION
+                && listing.getStatus() != ListingStatus.SOLD)) {
+            throw new BusinessException(ErrorCode.RETURN_LISTING_STATE_INVALID);
         }
 
-        // 15. Chuẩn hóa ghi chú.
         String note = request.note();
-
         if (note != null) {
             note = note.trim();
-
-            if (note.isEmpty()) {
-                note = null;
-            }
+            if (note.isEmpty()) note = null;
         }
 
-        // 16. Cập nhật ba đối tượng trong cùng transaction.
         returnRequest.completeReturn(actualAt);
         order.finishReturnAndRefund(recordedAt);
         listing.hideAfterSuccessfulReturn();
-
         returnRepository.saveAndFlush(returnRequest);
         orderRepository.saveAndFlush(order);
         listingRepository.saveAndFlush(listing);
 
-        // 17. Ghi lịch sử.
-        String actualIso =
-                actualAt.atOffset(ZoneOffset.UTC).toString();
-
-        String recordedIso =
-                recordedAt.atOffset(ZoneOffset.UTC).toString();
-
         int updated = orderRepository.appendReturnReceiptEvents(
-                orderId,
-                returnId,
-                adminId,
-                actualIso,
-                recordedIso,
-                order.getCodAmount(),
-                note,
-                recordedAt
+                orderId, returnId, adminId,
+                actualAt.atOffset(ZoneOffset.UTC).toString(),
+                recordedAt.atOffset(ZoneOffset.UTC).toString(),
+                order.getCodAmount(), note, recordedAt
         );
-
         if (updated != 1) {
-            throw new IllegalStateException(
-                    "Cannot append return receipt events"
-            );
+            throw new IllegalStateException("Cannot append return receipt events");
         }
-
-        // 18. Chỉ thông báo hoàn COD cho người mua.
-        notificationRepository.save(
-                Notification.codRefunded(
-                        order.getBuyer(),
-                        orderId
-                )
-        );
-
-        // 19. Trả dữ liệu đã cập nhật.
-        return new ReceiptOutcome(
-                buildReceiptResponse(
-                        returnRequest,
-                        order,
-                        listing
-                ),
-                null
-        );
+        // Chỉ thông báo hoàn COD cho người mua.
+        notificationRepository.save(Notification.codRefunded(order.getBuyer(), orderId));
+        return buildReceiptResponse(returnRequest, order, listing);
     }
 
     private AdminReturnReceiptResponse buildReceiptResponse(

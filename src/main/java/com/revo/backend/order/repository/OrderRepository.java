@@ -57,19 +57,14 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
                   )
             ),
 
-            EXISTS (
-                SELECT 1
-                FROM order_exceptions e
-                WHERE e.order_id = o.id
-                  AND e.status = 'PENDING'
-            ),
+            0 AS has_pending_exception, -- API compatibility (D12-D14 removed).
 
-            JSON_CONTAINS(
+            (o.status = 'IN_TRANSIT' AND JSON_CONTAINS(
                 o.shipping_history,
                 JSON_OBJECT(
                     'event_type', 'CANCEL_REQUESTED'
                 )
-            )
+            ))
 
         FROM orders o
         WHERE o.id IN (:orderIds)
@@ -261,31 +256,6 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
     );
 
 
-    @Query(value = """
-    SELECT jt.actual_at, jt.exception_id
-    FROM orders o
-    JOIN JSON_TABLE(
-        o.shipping_history,
-        '$[*]'
-        COLUMNS (
-            seq_no FOR ORDINALITY,
-            event_type VARCHAR(64)
-                PATH '$.event_type',
-            actual_at VARCHAR(48)
-                PATH '$.actual_at',
-            exception_id BIGINT
-                PATH '$.exception_id'
-        )
-    ) jt
-    WHERE o.id = :orderId
-      AND jt.event_type = 'DELIVERY_REPORTED_LATE'
-    ORDER BY jt.seq_no DESC
-    LIMIT 1
-    """, nativeQuery = true)
-    List<Object[]> findLateDeliveryReports(
-            @Param("orderId") Long orderId
-    );
-
     @Modifying(flushAutomatically = true)
     @Query(value = """
     UPDATE orders
@@ -313,47 +283,6 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
             @Param("adminId") Long adminId,
             @Param("note") String note,
             @Param("now") LocalDateTime now
-    );
-
-    @Modifying(flushAutomatically = true)
-    @Query(value = """
-    UPDATE orders
-    SET shipping_history = JSON_ARRAY_APPEND(
-        shipping_history,
-        '$',
-        JSON_OBJECT(
-            'event_type', 'DELIVERY_REPORTED_LATE',
-            'actual_at', :actualAt,
-            'recorded_at', :recordedAt,
-            'actor_type', 'ADMIN',
-            'admin_id', :adminId,
-            'actor_user_id', NULL,
-            'exception_id', :exceptionId,
-            'note', :note
-        )
-    ),
-    updated_at = :now
-    WHERE id = :orderId
-    """, nativeQuery = true)
-    int appendLateDeliveryReportEvent(
-            @Param("orderId") Long orderId,
-            @Param("actualAt") String actualAt,
-            @Param("recordedAt") String recordedAt,
-            @Param("adminId") Long adminId,
-            @Param("exceptionId") Long exceptionId,
-            @Param("note") String note,
-            @Param("now") LocalDateTime now
-    );
-
-    @Query(value = """
-    SELECT COUNT(*)
-    FROM order_exceptions
-    WHERE order_id = :orderId
-      AND status = 'PENDING'
-      AND exception_type IN ('DELIVERY', 'COD_ORDER')
-    """, nativeQuery = true)
-    long countBlockingReturnExceptions(
-            @Param("orderId") Long orderId
     );
 
     @Modifying(flushAutomatically = true)
@@ -443,77 +372,6 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
             @Param("now") LocalDateTime now
     );
 
-    @Query(value = """
-    SELECT jt.actual_at, jt.exception_id
-    FROM orders o
-    JOIN JSON_TABLE(
-        o.shipping_history,
-        '$[*]'
-        COLUMNS (
-            seq_no FOR ORDINALITY,
-            event_type VARCHAR(64)
-                PATH '$.event_type',
-            return_request_id BIGINT
-                PATH '$.return_request_id',
-            actual_at VARCHAR(48)
-                PATH '$.actual_at',
-            exception_id BIGINT
-                PATH '$.exception_id'
-        )
-    ) jt
-    WHERE o.id = :orderId
-      AND jt.event_type = 'RETURN_HANDOVER_LATE_REPORTED'
-      AND jt.return_request_id = :returnId
-    ORDER BY jt.seq_no DESC
-    LIMIT 1
-    """, nativeQuery = true)
-    List<Object[]> findLateReturnHandoverReports(
-            @Param("orderId") Long orderId,
-            @Param("returnId") Long returnId
-    );
-
-    @Modifying(flushAutomatically = true)
-    @Query(value = """
-    UPDATE orders
-    SET shipping_history = JSON_ARRAY_APPEND(
-        shipping_history,
-        '$',
-        JSON_OBJECT(
-            'event_type', 'RETURN_HANDOVER_LATE_REPORTED',
-            'actual_at', :actualAt,
-            'recorded_at', :recordedAt,
-            'actor_type', 'ADMIN',
-            'admin_id', :adminId,
-            'actor_user_id', NULL,
-            'return_request_id', :returnId,
-            'exception_id', :exceptionId,
-            'note', :note
-        )
-    ),
-    updated_at = :now
-    WHERE id = :orderId
-    """, nativeQuery = true)
-    int appendLateReturnHandoverEvent(
-            @Param("orderId") Long orderId,
-            @Param("returnId") Long returnId,
-            @Param("adminId") Long adminId,
-            @Param("exceptionId") Long exceptionId,
-            @Param("actualAt") String actualAt,
-            @Param("recordedAt") String recordedAt,
-            @Param("note") String note,
-            @Param("now") LocalDateTime now
-    );
-
-    @Query(value = """
-    SELECT COUNT(*)
-    FROM order_exceptions
-    WHERE order_id = :orderId
-      AND status = 'PENDING'
-    """, nativeQuery = true)
-    long countPendingOrderExceptions(
-            @Param("orderId") Long orderId
-    );
-
     @Modifying(flushAutomatically = true)
     @Query(value = """
     UPDATE orders
@@ -553,34 +411,6 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
             @Param("recordedAt") String recordedAt,
             @Param("codAmount") Long codAmount,
             @Param("note") String note,
-            @Param("now") LocalDateTime now
-    );
-
-    @Modifying(flushAutomatically = true)
-    @Query(value = """
-    UPDATE orders
-    SET shipping_history = JSON_ARRAY_APPEND(
-        shipping_history,
-        '$',
-        JSON_OBJECT(
-            'event_type', 'EXCEPTION_RECORDED',
-            'actual_at', :recordedAt,
-            'recorded_at', :recordedAt,
-            'actor_type', 'ADMIN',
-            'admin_id', :adminId,
-            'actor_user_id', NULL,
-            'exception_id', :exceptionId,
-            'reason', 'COD_ALREADY_SETTLED'
-        )
-    ),
-    updated_at = :now
-    WHERE id = :orderId
-    """, nativeQuery = true)
-    int appendCodSettlementExceptionEvent(
-            @Param("orderId") Long orderId,
-            @Param("exceptionId") Long exceptionId,
-            @Param("adminId") Long adminId,
-            @Param("recordedAt") String recordedAt,
             @Param("now") LocalDateTime now
     );
 
@@ -683,7 +513,8 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
     WHERE o.id = :orderId
       AND jt.event_type IN (
           'DELIVERED',
-          'DELIVERY_REPORTED_LATE'
+          'DELIVERY_REPORTED_LATE',
+          'RETURN_SHIPPING_CONFLICT'
       )
     """, nativeQuery = true)
     long countDeliveryEvidence(
@@ -716,61 +547,6 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
             @Param("recordedAt") String recordedAt,
             @Param("adminId") Long adminId,
             @Param("cancelReason") String cancelReason,
-            @Param("note") String note,
-            @Param("now") LocalDateTime now
-    );
-
-    @Query(value = """
-    SELECT jt.actual_at, jt.exception_id
-    FROM orders o
-    JOIN JSON_TABLE(
-        o.shipping_history,
-        '$[*]'
-        COLUMNS (
-            seq_no FOR ORDINALITY,
-            event_type VARCHAR(64)
-                PATH '$.event_type',
-            actual_at VARCHAR(48)
-                PATH '$.actual_at',
-            exception_id BIGINT
-                PATH '$.exception_id'
-        )
-    ) jt
-    WHERE o.id = :orderId
-      AND jt.event_type = 'RETURN_SHIPPING_CONFLICT'
-    ORDER BY jt.seq_no DESC
-    LIMIT 1
-    """, nativeQuery = true)
-    List<Object[]> findReturnShippingConflicts(
-            @Param("orderId") Long orderId
-    );
-
-    @Modifying(flushAutomatically = true)
-    @Query(value = """
-    UPDATE orders
-    SET shipping_history = JSON_ARRAY_APPEND(
-        shipping_history,
-        '$',
-        JSON_OBJECT(
-            'event_type', 'RETURN_SHIPPING_CONFLICT',
-            'actual_at', :actualAt,
-            'recorded_at', :recordedAt,
-            'actor_type', 'ADMIN',
-            'admin_id', :adminId,
-            'actor_user_id', NULL,
-            'exception_id', :exceptionId,
-            'note', :note
-        )
-    ),
-    updated_at = :now
-    WHERE id = :orderId
-    """, nativeQuery = true)
-    int appendReturnShippingConflictEvent(
-            @Param("orderId") Long orderId,
-            @Param("actualAt") String actualAt,
-            @Param("recordedAt") String recordedAt,
-            @Param("adminId") Long adminId,
-            @Param("exceptionId") Long exceptionId,
             @Param("note") String note,
             @Param("now") LocalDateTime now
     );

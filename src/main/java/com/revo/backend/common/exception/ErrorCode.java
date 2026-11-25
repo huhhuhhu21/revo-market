@@ -409,16 +409,6 @@ public enum ErrorCode {
             "Đơn hàng đang có yêu cầu hủy chờ chuyển hoàn."
     ),
 
-    DELIVERY_HAS_BLOCKING_EXCEPTION(
-            HttpStatus.CONFLICT,
-            "Đơn hàng có ngoại lệ chưa được giải quyết."
-    ),
-
-    DELIVERY_REQUIRES_EXCEPTION(
-            HttpStatus.CONFLICT,
-            "Giao hàng được ghi nhận quá muộn, cần ADMIN xử lý ngoại lệ."
-    ),
-
     ONLY_BUYER_CAN_RETURN(
             HttpStatus.FORBIDDEN,
             "Chỉ người mua của đơn mới được yêu cầu trả hàng."
@@ -432,11 +422,6 @@ public enum ErrorCode {
     ORDER_NOT_ELIGIBLE_FOR_RETURN(
             HttpStatus.CONFLICT,
             "Đơn hàng chưa đủ điều kiện trả hàng."
-    ),
-
-    ORDER_HAS_BLOCKING_EXCEPTION(
-            HttpStatus.CONFLICT,
-            "Đơn hàng có ngoại lệ chưa được giải quyết."
     ),
 
     RETURN_REQUEST_WINDOW_EXPIRED(
@@ -474,11 +459,6 @@ public enum ErrorCode {
             "COD không ở trạng thái đang giữ."
     ),
 
-    RETURN_HANDOVER_REQUIRES_EXCEPTION(
-            HttpStatus.CONFLICT,
-            "Việc bàn giao cần được xử lý qua ngoại lệ."
-    ),
-
     RETURN_NOT_RETURNING(
             HttpStatus.CONFLICT,
             "Yêu cầu trả hàng chưa ở trạng thái đang chuyển hoàn."
@@ -499,6 +479,11 @@ public enum ErrorCode {
             "Trạng thái bài đăng không phù hợp để hoàn tất trả hàng."
     ),
 
+    RETURN_SHIPPING_DELIVERY_CONFLICT(
+            HttpStatus.CONFLICT,
+            "Đơn hàng đã có dấu hiệu giao thành công hoặc thu COD, không thể hủy theo luồng chuyển hoàn."
+    ),
+
     RETURN_SHIPPING_NOT_READY(
             HttpStatus.CONFLICT,
             "Đơn hàng chưa đủ điều kiện hoàn tất chuyển hoàn."
@@ -517,11 +502,6 @@ public enum ErrorCode {
     RETURN_SHIPPING_ALREADY_COMPLETED(
             HttpStatus.CONFLICT,
             "Đã ghi nhận chuyển hoàn với thời điểm khác."
-    ),
-
-    RETURN_SHIPPING_REQUIRES_EXCEPTION(
-            HttpStatus.CONFLICT,
-            "Cần xử lý ngoại lệ trước khi hủy đơn."
     );
 
 
