@@ -54,7 +54,8 @@ import com.revo.backend.listing.repository.ListingRepository;
 import com.revo.backend.order.dto.AdminReturnReceiptRequest;
 import com.revo.backend.order.dto.AdminReturnReceiptResponse;
 
-import java.util.Objects;
+import com.revo.backend.order.dto.RejectReturnRequest;
+
 
 @Service
 public class ReturnRequestService {
@@ -1341,6 +1342,146 @@ public class ReturnRequestService {
                         listing.getHiddenReasonType()
                 )
         );
+    }
+
+    @Transactional
+    public ReturnRequestResponse rejectReturn(
+            Long adminId,
+            String rawReturnId,
+            RejectReturnRequest request
+    ) {
+        // 1. Kiểm tra returnId và request.
+        Long returnId = parseReturnId(rawReturnId);
+
+        if (request == null || request.reason() == null) {
+            throw new BusinessException(
+                    ErrorCode.VALIDATION_ERROR
+            );
+        }
+
+        String reason = request.reason().trim();
+
+        if (reason.isEmpty()) {
+            throw new BusinessException(
+                    ErrorCode.VALIDATION_ERROR
+            );
+        }
+
+        // 2. Kiểm tra ADMIN đang ACTIVE.
+        User admin = userRepository.findById(adminId)
+                .orElseThrow(() -> new BusinessException(
+                        ErrorCode.FORBIDDEN
+                ));
+
+        if (admin.getRole() != User.Role.ADMIN
+                || admin.getStatus() != User.Status.ACTIVE) {
+            throw new BusinessException(
+                    ErrorCode.FORBIDDEN
+            );
+        }
+
+        // 3. Lấy Order ID liên kết với ReturnRequest.
+        Long orderId = returnRepository
+                .findOrderIdByReturnId(returnId)
+                .orElseThrow(() -> new BusinessException(
+                        ErrorCode.RETURN_REQUEST_NOT_FOUND
+                ));
+
+        // 4. Khóa Order trước.
+        Order order = orderRepository
+                .findByIdForUpdate(orderId)
+                .orElseThrow(() -> new BusinessException(
+                        ErrorCode.ORDER_NOT_FOUND
+                ));
+
+        // 5. Khóa ReturnRequest sau Order.
+        ReturnRequest returnRequest = returnRepository
+                .findByIdForUpdate(returnId)
+                .orElseThrow(() -> new BusinessException(
+                        ErrorCode.RETURN_REQUEST_NOT_FOUND
+                ));
+
+        // 6. Retry: yêu cầu đã bị từ chối.
+        if (returnRequest.getStatus()
+                == ReturnStatus.REJECTED) {
+
+            if (Objects.equals(
+                    returnRequest.getAdminReason(),
+                    reason
+            )) {
+                // Giữ nguyên kết quả đã lưu.
+                // Không ghi thêm lịch sử hay thông báo.
+                return toAdminResponse(returnRequest);
+            }
+
+            // Không cho ADMIN thay đổi lý do đã từ chối.
+            throw new BusinessException(
+                    ErrorCode.RETURN_NOT_PENDING
+            );
+        }
+
+        // 7. Chỉ từ chối yêu cầu PENDING.
+        if (returnRequest.getStatus()
+                != ReturnStatus.PENDING) {
+            throw new BusinessException(
+                    ErrorCode.RETURN_NOT_PENDING
+            );
+        }
+
+        // D09 không kiểm tra lại hạn tạo return.
+        // Yêu cầu PENDING đã được tạo hợp lệ tại D01.
+
+        // 8. Thời điểm từ chối do backend tạo.
+        LocalDateTime now =
+                LocalDateTime.now(ZoneOffset.UTC)
+                        .truncatedTo(ChronoUnit.MILLIS);
+
+        // 9. Cập nhật ReturnRequest.
+        returnRequest.reject(
+                admin,
+                reason,
+                now
+        );
+
+        returnRepository.saveAndFlush(returnRequest);
+
+        // 10. Ghi lịch sử từ chối vào Order.
+        String isoAt =
+                now.atOffset(ZoneOffset.UTC).toString();
+
+        int updated = orderRepository.appendReturnRejectedEvent(
+                orderId,
+                returnId,
+                adminId,
+                isoAt,
+                reason,
+                now
+        );
+
+        if (updated != 1) {
+            throw new IllegalStateException(
+                    "Cannot append RETURN_REJECTED event"
+            );
+        }
+
+        // 11. Thông báo cho người mua và người bán.
+        notificationRepository.saveAll(
+                List.of(
+                        Notification.returnRejected(
+                                order.getBuyer(),
+                                returnId,
+                                true
+                        ),
+                        Notification.returnRejected(
+                                order.getSeller(),
+                                returnId,
+                                false
+                        )
+                )
+        );
+
+        // 12. Trả về DTO dành cho ADMIN.
+        return toAdminResponse(returnRequest);
     }
 
 }

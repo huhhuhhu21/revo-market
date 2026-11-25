@@ -183,4 +183,24 @@ public class ReturnRequest {
         this.returnedAt = actualAt;
     }
 
+    public void reject(
+            User admin,
+            String reason,
+            LocalDateTime now
+    ) {
+        if (status != ReturnStatus.PENDING) {
+            throw new IllegalStateException(
+                    "Return request is not pending"
+            );
+        }
+
+        this.status = ReturnStatus.REJECTED;
+        this.processedBy = admin;
+        this.processedAt = now;
+        this.adminReason = reason;
+
+        // Không tạo returnDeadline.
+        // Không sửa handedOverAt hoặc returnedAt.
+    }
+
 }

@@ -185,4 +185,26 @@ public class Notification {
         return notification;
     }
 
+    public static Notification returnRejected(
+            User recipient,
+            Long returnId,
+            boolean isBuyer
+    ) {
+        Notification notification = new Notification();
+
+        notification.user = recipient;
+        notification.type = "RETURN_REJECTED";
+
+        notification.content = isBuyer
+                ? "Yêu cầu trả hàng của bạn đã bị từ chối. "
+                + "Vui lòng xem lý do trong chi tiết yêu cầu."
+                : "ADMIN đã từ chối yêu cầu trả hàng "
+                + "của người mua.";
+
+        notification.refType = "RETURN_REQUEST";
+        notification.refId = returnId;
+
+        return notification;
+    }
+
 }
